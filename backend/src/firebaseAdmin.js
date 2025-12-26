@@ -6,9 +6,8 @@ let inicializado = false;
 export function initFirebaseAdmin() {
   if (inicializado) return;
 
-  // 1) Preferir JSON via ENV (produção / Render)
+  // ✅ Produção (Render): JSON via ENV
   const jsonEnv = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-
   if (jsonEnv) {
     const serviceAccount = JSON.parse(jsonEnv);
 
@@ -21,12 +20,12 @@ export function initFirebaseAdmin() {
     return;
   }
 
-  // 2) Fallback: arquivo local (desenvolvimento)
+  // ✅ Local (dev): arquivo
   const path = process.env.FIREBASE_SERVICE_ACCOUNT_PATH || "./serviceAccountKey.json";
 
   if (!fs.existsSync(path)) {
     console.error("❌ Service Account não encontrado:", path);
-    console.error("➡️ Em produção use FIREBASE_SERVICE_ACCOUNT_JSON no .env do Render");
+    console.error("➡️ Em produção use FIREBASE_SERVICE_ACCOUNT_JSON nas variáveis do Render");
     process.exit(1);
   }
 
