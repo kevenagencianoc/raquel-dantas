@@ -10,8 +10,8 @@ function authToken(req) {
 
 /**
  * GET /api/consumer/polling?token=SEU_TOKEN
- * O Consumer fica chamando isso periodicamente para buscar eventos.
- * Aqui vamos devolver "PLACED" para pedidos prontos.
+ * Retorna eventos somente para pedidos "pronto_para_enviar_consumer"
+ * (quando o Consumer buscar os detalhes, o pedido vira "enviado_para_consumer" e some daqui).
  */
 router.get("/polling", async (req, res) => {
   if (!authToken(req)) {
@@ -43,6 +43,7 @@ router.get("/polling", async (req, res) => {
 /**
  * GET /api/consumer/orders/:orderId?token=SEU_TOKEN
  * O Consumer pede o pedido completo pelo ID.
+ * ✅ Aqui marcamos o pedido como "enviado_para_consumer" para não voltar no polling.
  */
 router.get("/orders/:orderId", async (req, res) => {
   if (!authToken(req)) {
@@ -157,12 +158,14 @@ router.get("/orders/:orderId", async (req, res) => {
     reasonPhrase: null,
   };
 
-  // ✅ marca que o Consumer buscou detalhes
+  // ✅ Marca que o Consumer consultou os detalhes + remove do polling
   await ref.set(
     {
       integracao: {
         ...(p.integracao || {}),
         detalhesConsultadosEm: new Date().toISOString(),
+        status: "enviado_para_consumer",
+        enviadoEm: new Date().toISOString(),
       },
     },
     { merge: true }
