@@ -5,7 +5,13 @@ import "./Checkout.css";
 import logo from "../assets/logo.png";
 
 import { db } from "../firebase.js";
-import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+import {
+  addDoc,
+  collection,
+  serverTimestamp,
+  doc,
+  setDoc,
+} from "firebase/firestore";
 
 function dinheiro(v) {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -124,23 +130,25 @@ export default function Checkout() {
       const docRef = await addDoc(collection(db, "pedidos"), pedido);
       const pedidoId = docRef.id;
 
-      // 2) Chama backend (marca como pronto para Consumer)
-      try {
-        await fetch("http://localhost:3333/api/consumer/enviar", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pedidoId }),
-        });
-      } catch (e) {
-        console.warn("⚠️ Backend não respondeu, mas o pedido foi salvo no Firebase:", e);
-      }
+      // 2) Marca como pronto para o Consumer puxar via backend (polling)
+      await setDoc(
+        doc(db, "pedidos", pedidoId),
+        {
+          integracao: {
+            status: "pronto_para_enviar_consumer",
+            prontoEm: new Date().toISOString(),
+            origem: "site",
+          },
+        },
+        { merge: true }
+      );
 
       // 3) Limpa carrinho e finaliza
       limparCarrinho();
       alert(`Pedido enviado! ✅\nNúmero do pedido: ${pedidoId}`);
       navigate("/");
     } catch (e) {
-      console.error("Erro ao salvar pedido:", e);
+      console.error("Erro ao enviar pedido:", e);
       alert("Erro ao enviar pedido. Verifique Firestore e tente novamente.");
     } finally {
       setEnviando(false);
