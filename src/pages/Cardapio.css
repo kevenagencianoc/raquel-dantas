@@ -1,0 +1,302 @@
+.pagina {
+  min-height: 100vh;
+  background: #ffffff;
+}
+
+/* ===================== TOPO ===================== */
+.topo {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: #F1C4D3;
+}
+
+.topo-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+@media (min-width: 768px) {
+  .topo-inner { max-width: 1040px; }
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+}
+
+/* LOGO GRANDE (mantida) */
+.logo {
+  width: 140px;
+  height: 72px;
+  border-radius: 0;
+  object-fit: contain;
+  background: transparent;
+}
+
+/* remove texto do topo */
+.brand-txt {
+  display: none;
+}
+
+/* ===================== ÍCONES TOPO ===================== */
+.icones-topo {
+  display: flex;
+  gap: 12px;
+}
+
+/* ÍCONES BRANCOS */
+.icone-botao {
+  width: 44px;          /* voltou ao tamanho menor */
+  height: 44px;
+  border-radius: 14px;
+  border: 0;
+  background: transparent;
+  color: #FFF;          /* BRANCO PURO */
+  font-size: 22px;      /* menor que antes */
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icone-botao:active {
+  transform: scale(0.97);
+}
+
+/* ===================== HERO ===================== */
+.hero {
+  padding: 16px 0 10px;
+}
+
+.hero-card {
+  border-radius: 22px;
+  padding: 16px; /* voltou */
+  background: #F1C4D3;
+  box-shadow: 0 14px 30px rgba(0,0,0,0.12);
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-card::before {
+  content: "";
+  position: absolute;
+  inset: -100px -100px auto auto;
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  background: rgba(227,120,156,0.25);
+}
+
+.hero-card h2 {
+  margin: 0;
+  font-size: 22px; /* voltou */
+  font-weight: 1000;
+  color: #9D3E3D;
+}
+
+.hero-card p {
+  margin: 8px 0 14px;
+  font-size: 13px;
+  color: #9D3E3D;
+}
+
+/* ===================== BOTÕES HERO ===================== */
+.hero-acoes {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* BOTÕES PEQUENOS (como antes) */
+.botao-primario,
+.botao-secundario {
+  height: 46px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 0;
+  background: #ffffff;
+  color: #9D3E3D;
+  font-weight: 1000;
+  font-size: 14px;
+  cursor: pointer;
+  box-shadow: 0 10px 22px rgba(0,0,0,0.12);
+}
+
+.botao-primario:active,
+.botao-secundario:active {
+  transform: scale(0.98);
+}
+
+/* ===================== BUSCA ===================== */
+.busca {
+  margin-top: 14px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  border-radius: 18px;
+  background: #ffffff;
+  border: 1px solid rgba(157,62,61,0.2);
+}
+
+.busca input {
+  border: 0;
+  outline: none;
+  width: 100%;
+  font-size: 14px;
+  color: #9D3E3D;
+}
+
+.busca input::placeholder {
+  color: rgba(157,62,61,0.7);
+}
+
+/* ===================== CATEGORIAS ===================== */
+.categorias {
+  margin-top: 14px;
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+
+.chip {
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(157,62,61,0.25);
+  background: #ffffff;
+  color: #9D3E3D;
+  font-weight: 1000;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.chip.ativo {
+  background: #E3789C;
+  color: #ffffff;
+  border-color: transparent;
+}
+
+/* ===================== LISTA ===================== */
+.titulo-secao {
+  margin: 18px 0 12px;
+  font-size: 18px;
+  font-weight: 1000;
+  color: #9D3E3D;
+}
+
+.lista {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  padding-bottom: 100px;
+}
+
+@media (min-width: 768px) {
+  .lista { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ===================== CARD PRODUTO ===================== */
+.card {
+  display: flex;
+  gap: 14px;
+  padding: 14px;
+  border-radius: 22px;
+  background: #F1C4D3;
+  box-shadow: 0 12px 26px rgba(0,0,0,0.12);
+}
+
+.foto {
+  width: 100px;
+  height: 100px;
+  border-radius: 20px;
+  background: rgba(227,120,156,0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.foto span {
+  font-size: 28px;
+  color: #9D3E3D;
+}
+
+.nome {
+  font-size: 15px;
+  font-weight: 1000;
+  color: #9D3E3D;
+}
+
+.desc {
+  font-size: 13px;
+  color: #9D3E3D;
+  margin: 6px 0 10px;
+}
+
+.preco {
+  font-size: 14px;
+  font-weight: 1000;
+  color: #9D3E3D;
+}
+
+/* ===================== BOTÃO ADICIONAR ===================== */
+.btn-add {
+  height: 40px;        /* voltou */
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 0;
+  background: #34A33A;
+  color: #ffffff;
+  font-weight: 1000;
+  font-size: 14px;
+  cursor: pointer;
+  margin-top: 15px;
+}
+
+.btn-add:active {
+  transform: scale(0.97);
+}
+
+/* ===================== CARRINHO FIXO ===================== */
+.carrinho-fixo {
+  position: fixed;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 28px);
+  max-width: 560px;
+  padding: 14px;
+  border-radius: 20px;
+  background: #F1C4D3;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.carrinho-fixo strong,
+.carrinho-fixo small {
+  color: #9D3E3D;
+}
+
+/* VER CARRINHO (tamanho normal) */
+.btn-ver-carrinho {
+  height: 46px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 0;
+  background: #34A33A;
+  color: #ffffff;
+  font-weight: 1000;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.btn-ver-carrinho:active {
+  transform: scale(0.97);
+}
