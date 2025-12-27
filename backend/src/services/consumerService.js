@@ -2,16 +2,17 @@ import axios from "axios";
 import { getDb } from "../firebaseAdmin.js";
 
 /**
- * Aqui está o “esqueleto” da integração.
- * Sem API Key, vamos só:
- * - Ler o pedido
- * - Marcar no Firestore que está pronto para envio
- *
- * Quando você tiver a API Key do Consumer, a gente liga o envio real.
+ * Integração com o Consumer
+ * Fluxo:
+ * 1. Lê o pedido no Firestore
+ * 2. Monta o payload NO FORMATO EXATO do Consumer
+ * 3. Envia para a API do Consumer
+ * 4. Salva a resposta no Firestore
  */
 export async function enviarPedidoParaConsumer(pedidoId) {
   const db = getDb();
 
+  // 🔹 Busca o pedido
   const ref = db.collection("pedidos").doc(pedidoId);
   const snap = await ref.get();
 
@@ -21,56 +22,97 @@ export async function enviarPedidoParaConsumer(pedidoId) {
 
   const pedido = snap.data();
 
-  // ✅ Marca que chegou no backend (ajuda no debug)
+  // 🔹 Marca que o backend recebeu
   await ref.update({
     integracao: {
       ...(pedido.integracao || {}),
       backendRecebeuEm: new Date().toISOString(),
-      status: "pronto_para_enviar_consumer",
+      status: "montando_payload_consumer",
     },
   });
 
-  // 🚧 ENVIO REAL PRO CONSUMER (depois)
+  // 🔹 Configuração da API do Consumer
   const apiKey = process.env.CONSUMER_API_KEY;
   const baseUrl = process.env.CONSUMER_BASE_URL;
 
-  if (!apiKey || apiKey === "COLOQUE_AQUI_DEPOIS") {
+  if (!apiKey || !baseUrl) {
     return {
       pedidoId,
       enviado: false,
-      motivo: "Sem API KEY do Consumer ainda. Pedido marcado como pronto_para_enviar_consumer.",
+      motivo: "API KEY ou BASE URL do Consumer não configuradas",
     };
   }
 
-  // Quando você tiver a doc completa + API KEY, vamos ajustar o payload corretamente.
-  // Abaixo é só um template (NÃO FINAL):
+  /**
+   * 🔥 PAYLOAD NO FORMATO EXATO DO MANUAL DO CONSUMER
+   * https://ajuda.programaconsumer.com.br/integracao-api-do-parceiro/
+   */
   const payload = {
-    // TODO: montar conforme documentação do Consumer
-    pedidoId,
-    cliente: pedido.cliente,
-    entrega: pedido.entrega,
-    pagamento: pedido.pagamento,
-    observacoes: pedido.observacoes,
-    itens: pedido.itens,
-    resumo: pedido.resumo,
+    externalCode: String(pedidoId),
+
+    items: (pedido.itens || []).map((item) => {
+      const quantidade = Number(item.quantidade || item.qtd || 1);
+      const precoUnitario = Number(item.preco);
+
+      return {
+        externalCode: String(item.externalCode), // 🔥 obrigatório e STRING
+        name: item.nome,
+        quantity: quantidade,
+        unitPrice: precoUnitario,
+        totalPrice: precoUnitario * quantidade,
+      };
+    }),
+
+    observations: pedido.observacoes || "",
   };
 
-  const resp = await axios.post(`${baseUrl}/pedidos`, payload, {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    timeout: 15000,
-  });
+  // 🔎 Log para debug (pode remover depois)
+  console.log("PAYLOAD ENVIADO AO CONSUMER:", JSON.stringify(payload, null, 2));
 
-  await ref.update({
-    integracao: {
-      ...(pedido.integracao || {}),
-      status: "enviado_consumer",
-      consumerResposta: resp.data || null,
-      enviadoEm: new Date().toISOString(),
-    },
-  });
+  try {
+    // 🔹 Envio para o Consumer
+    const resp = await axios.post(`${baseUrl}/orders`, payload, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 15000,
+    });
 
-  return { pedidoId, enviado: true, consumer: resp.data };
+    // 🔹 Salva sucesso no Firestore
+    await ref.update({
+      integracao: {
+        ...(pedido.integracao || {}),
+        status: "enviado_consumer",
+        enviadoEm: new Date().toISOString(),
+        consumerResposta: resp.data || null,
+      },
+    });
+
+    return {
+      pedidoId,
+      enviado: true,
+      consumer: resp.data,
+    };
+  } catch (error) {
+    // 🔴 Em caso de erro do Consumer
+    const erroConsumer = error.response?.data || error.message;
+
+    console.error("ERRO AO ENVIAR PARA CONSUMER:", erroConsumer);
+
+    await ref.update({
+      integracao: {
+        ...(pedido.integracao || {}),
+        status: "erro_consumer",
+        erro: erroConsumer,
+        erroEm: new Date().toISOString(),
+      },
+    });
+
+    throw new Error(
+      typeof erroConsumer === "string"
+        ? erroConsumer
+        : JSON.stringify(erroConsumer)
+    );
+  }
 }
