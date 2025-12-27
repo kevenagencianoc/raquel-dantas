@@ -1,0 +1,34 @@
+:root {
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  line-height: 1.35;
+
+  /* Cores da marca */
+  --cor-fundo: #ffffff;      /* fundo branco da tela */
+  --cor-topo: #F1C4D3;       /* topo e cards */
+  --cor-primaria: #E3789C;   /* botões/ativo */
+  --cor-texto: #9D3E3D;      /* textos internos */
+
+  --branco: #ffffff;
+  --sombra: rgba(0, 0, 0, 0.12);
+  --sombra-fraca: rgba(0, 0, 0, 0.08);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--cor-fundo);
+  color: var(--cor-texto);
+}
+
+a { color: inherit; text-decoration: none; }
+
+.container {
+  max-width: 560px; /* mobile-first */
+  margin: 0 auto;
+  padding: 14px;
+}
+
+@media (min-width: 768px) {
+  .container { max-width: 1040px; }
+}

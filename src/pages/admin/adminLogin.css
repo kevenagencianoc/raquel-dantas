@@ -1,0 +1,195 @@
+/* Base do seu layout */
+.admin-pagina {
+  min-height: 100vh;
+  background: #ffffff;
+}
+
+/* ===================== TOPO ===================== */
+.admin-topo {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: #F1C4D3;
+  box-shadow: 0 10px 22px rgba(0,0,0,0.08);
+}
+
+.admin-topo-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+@media (min-width: 768px) {
+  .admin-topo-inner { max-width: 1040px; }
+}
+
+.admin-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.admin-brand h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 1000;
+  color: #9D3E3D;
+}
+
+.admin-badge {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(227,120,156,0.25);
+  color: #9D3E3D;
+  font-weight: 1000;
+  font-size: 12px;
+  border: 1px solid rgba(157,62,61,0.18);
+}
+
+/* ===================== CONTEÚDO ===================== */
+.admin-container {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+@media (min-width: 768px) {
+  .admin-container { max-width: 1040px; }
+}
+
+/* ===================== HERO ===================== */
+.admin-hero {
+  padding: 14px 0 10px;
+}
+
+.admin-hero-card {
+  border-radius: 22px;
+  padding: 16px;
+  background: #F1C4D3;
+  box-shadow: 0 14px 30px rgba(0,0,0,0.12);
+  position: relative;
+  overflow: hidden;
+}
+
+.admin-hero-card::before {
+  content: "";
+  position: absolute;
+  inset: -100px -100px auto auto;
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  background: rgba(227,120,156,0.25);
+}
+
+.admin-hero-card h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 1000;
+  color: #9D3E3D;
+}
+
+.admin-hero-card p {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #9D3E3D;
+}
+
+/* ===================== CARD LOGIN ===================== */
+.admin-login-card {
+  margin-top: 14px;
+  border-radius: 22px;
+  padding: 16px;
+  background: #ffffff;
+  border: 1px solid rgba(157,62,61,0.2);
+}
+
+.admin-titulo {
+  margin: 0 0 10px;
+  font-size: 16px;
+  font-weight: 1000;
+  color: #9D3E3D;
+}
+
+.admin-login-sub {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #9D3E3D;
+  opacity: 0.9;
+}
+
+.admin-form {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-input {
+  width: 100%;
+  border: 1px solid rgba(157,62,61,0.2);
+  border-radius: 14px;
+  padding: 12px 12px;
+  outline: none;
+  color: #9D3E3D;
+  font-weight: 700;
+  background: #ffffff;
+}
+
+.admin-input::placeholder {
+  color: rgba(157,62,61,0.7);
+}
+
+.admin-acoes {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.admin-botao-verde {
+  height: 46px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 0;
+  background: #34A33A;
+  color: #ffffff;
+  font-weight: 1000;
+  font-size: 14px;
+  cursor: pointer;
+  box-shadow: 0 10px 22px rgba(0,0,0,0.12);
+}
+
+.admin-botao-branco {
+  height: 46px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 0;
+  background: #ffffff;
+  color: #9D3E3D;
+  font-weight: 1000;
+  font-size: 14px;
+  cursor: pointer;
+  box-shadow: 0 10px 22px rgba(0,0,0,0.12);
+}
+
+.admin-botao-verde:active,
+.admin-botao-branco:active {
+  transform: scale(0.98);
+}
+
+.admin-linkbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.admin-erro {
+  color: #9D3E3D;
+  font-weight: 1000;
+  background: rgba(227,120,156,0.20);
+  border: 1px solid rgba(157,62,61,0.18);
+  padding: 10px 12px;
+  border-radius: 14px;
+}
