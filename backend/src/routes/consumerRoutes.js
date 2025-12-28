@@ -6,7 +6,7 @@ import { obterDetalhesPedidoParaConsumer } from "../services/consumerService.js"
 const router = Router();
 
 /* =========================
-   TOKEN (Consumer aceita query e headers)
+   TOKEN
 ========================= */
 function getToken(req) {
   let t =
@@ -28,15 +28,22 @@ function getToken(req) {
 function authToken(req) {
   const recebido = getToken(req);
   const esperado = process.env.PARTNER_TOKEN;
-  // Se não tiver PARTNER_TOKEN no .env, bloqueia (mais seguro).
   return !!(esperado && recebido && recebido === esperado);
 }
 
+function isoAgora() {
+  return new Date().toISOString();
+}
+
+function uuid() {
+  return crypto.randomUUID
+    ? crypto.randomUUID()
+    : Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+
 /* =========================
-   1) POLLING (Consumer consulta eventos)
-   Manual: items[{id, orderId, createdAt ISO, fullCode, code}] + statusCode
-   REGRA CRÍTICA: NÃO "ACK" cedo demais.
-   O evento deve continuar aparecendo até o Consumer pegar os detalhes com sucesso.
+   1) POLLING (GET)
+   ✅ Agora pega pedidos recentes mesmo sem integracao.status
 ========================= */
 router.get("/polling", async (req, res) => {
   try {
@@ -46,54 +53,50 @@ router.get("/polling", async (req, res) => {
 
     const db = getDb();
 
-    // ✅ Buscamos pedidos que ainda precisam gerar/emitir evento
-    // - status "pronto_para_enviar_consumer"
-    // - OU status "consumer_notificado" (caso já tenha marcado antes, mas sem concluir)
-    // Obs: usamos 'in' em um único campo (geralmente não exige índice composto)
-    let snap;
-    try {
-      snap = await db
-        .collection("pedidos")
-        .where("integracao.status", "in", ["pronto_para_enviar_consumer", "consumer_notificado"])
-        .get();
-    } catch (e) {
-      // fallback: se "in" não estiver habilitado no seu projeto
-      const s1 = await db
-        .collection("pedidos")
-        .where("integracao.status", "==", "pronto_para_enviar_consumer")
-        .get();
-      const s2 = await db
-        .collection("pedidos")
-        .where("integracao.status", "==", "consumer_notificado")
-        .get();
+    // Vamos buscar pedidos recentes. Tentamos por "criadoEm", se não existir usamos "createdAt".
+    let docs = [];
 
-      const map = new Map();
-      for (const d of s1.docs) map.set(d.id, d);
-      for (const d of s2.docs) map.set(d.id, d);
-      snap = { docs: Array.from(map.values()) };
+    try {
+      const snap = await db
+        .collection("pedidos")
+        .orderBy("criadoEm", "desc")
+        .limit(30)
+        .get();
+      docs = snap.docs;
+    } catch (e1) {
+      try {
+        const snap = await db
+          .collection("pedidos")
+          .orderBy("createdAt", "desc")
+          .limit(30)
+          .get();
+        docs = snap.docs;
+      } catch (e2) {
+        // fallback final: sem orderBy (não ideal, mas não para o sistema)
+        const snap = await db.collection("pedidos").limit(30).get();
+        docs = snap.docs;
+      }
     }
 
     const items = [];
 
-    for (const d of snap.docs) {
+    for (const d of docs) {
       const pedidoId = d.id;
-      const data = d.data() || {};
-      const integracao = data.integracao || {};
+      const pedido = d.data() || {};
+      const integracao = pedido.integracao || {};
 
-      /**
-       * ✅ REGRA:
-       * Se o evento estiver pendente, ele DEVE aparecer no polling SEMPRE.
-       * Se ainda não existir evento, criamos agora com ID fixo.
-       */
+      // Se já marcou como integrado/consumido, ignora
+      if (integracao.eventoPendente === false || integracao.status === "integrado_consumer") {
+        continue;
+      }
+
+      // Cria evento se não existir ainda
       let eventoId = integracao.eventoId;
       let eventoCreatedAt = integracao.eventoCreatedAt;
-      let eventoPendente = integracao.eventoPendente;
 
-      // Se nunca criamos evento, criamos e marcamos como pendente
       if (!eventoId) {
-        eventoId = crypto.randomUUID();
-        eventoCreatedAt = new Date().toISOString();
-        eventoPendente = true;
+        eventoId = uuid();
+        eventoCreatedAt = isoAgora();
 
         await db.collection("pedidos").doc(pedidoId).set(
           {
@@ -102,57 +105,61 @@ router.get("/polling", async (req, res) => {
               eventoId,
               eventoCreatedAt,
               eventoPendente: true,
-
-              // Mantemos um status rastreável, mas NÃO tiramos do polling.
-              // Se você quiser, pode manter o "pronto_para_enviar_consumer" aqui mesmo.
               status: integracao.status || "pronto_para_enviar_consumer",
             },
           },
           { merge: true }
         );
-      }
-
-      // Se evento está pendente, devolve no polling
-      if (eventoPendente === true) {
-        items.push({
-          id: String(eventoId),         // ✅ id do evento (fixo)
-          orderId: String(pedidoId),     // ✅ id do pedido
-          createdAt: String(eventoCreatedAt || new Date().toISOString()),
-          fullCode: "PLACED",
-          code: "PLC",
-        });
-
-        // ✅ IMPORTANTE:
-        // NÃO mude status para tirar do polling aqui.
-        // No máximo, registre que o consumer foi notificado, mas mantendo eventoPendente true.
-        await db.collection("pedidos").doc(pedidoId).set(
-          {
-            integracao: {
-              ...(integracao || {}),
-              consumerNotificadoEm: new Date().toISOString(),
-              // status: "consumer_notificado" // <- você PODE setar, mas o evento continua pendente!
-              status: "consumer_notificado",
-              eventoId,
-              eventoCreatedAt,
-              eventoPendente: true,
+      } else {
+        // garante que fique pendente se não estiver marcado como false
+        if (integracao.eventoPendente !== true) {
+          await db.collection("pedidos").doc(pedidoId).set(
+            {
+              integracao: {
+                ...(integracao || {}),
+                eventoPendente: true,
+              },
             },
-          },
-          { merge: true }
-        );
+            { merge: true }
+          );
+        }
       }
+
+      // Devolve o evento no polling
+      items.push({
+        id: String(eventoId),
+        orderId: String(pedidoId),
+        createdAt: String(eventoCreatedAt || isoAgora()),
+        fullCode: "PLACED",
+        code: "PLC",
+      });
+
+      // opcional: marca que notificou (não remove do polling)
+      await db.collection("pedidos").doc(pedidoId).set(
+        {
+          integracao: {
+            ...(integracao || {}),
+            consumerNotificadoEm: isoAgora(),
+            status: "consumer_notificado",
+            eventoId,
+            eventoCreatedAt,
+            eventoPendente: true,
+          },
+        },
+        { merge: true }
+      );
     }
 
     return res.status(200).json({ items, statusCode: 0, reasonPhrase: null });
   } catch (e) {
     console.error("❌ Erro no polling:", e);
-    return res.status(500).json({ statusCode: 99, reasonPhrase: "Erro interno no polling" });
+    return res.status(200).json({ items: [], statusCode: 0, reasonPhrase: null });
   }
 });
 
 /* =========================
-   2) GET DETALHES DO PEDIDO (Consumer consulta)
-   Manual: retorna { item: {...}, statusCode: 0, reasonPhrase: null }
-   REGRA CRÍTICA: quando deu sucesso, "fecha" o evento (eventoPendente=false).
+   2) DETALHES DO PEDIDO (GET)
+   ✅ Quando o consumer pega detalhes OK, consome o evento (eventoPendente=false)
 ========================= */
 router.get("/orders/:orderId", async (req, res) => {
   try {
@@ -161,20 +168,16 @@ router.get("/orders/:orderId", async (req, res) => {
     }
 
     const { orderId } = req.params;
-
     const resp = await obterDetalhesPedidoParaConsumer(orderId);
 
-    // ✅ Se entregou detalhes corretamente, marca integrado e "consome" o evento
+    // se entregou detalhes corretamente, consome evento
     if (resp?.statusCode === 0 && resp?.item) {
       const db = getDb();
       await db.collection("pedidos").doc(String(orderId)).set(
         {
           integracao: {
             status: "integrado_consumer",
-            integradoEm: new Date().toISOString(),
-
-            // ✅ ESSA É A CHAVE PRA NÃO SUMIR:
-            // enquanto isso não for false, o polling continua devolvendo o evento.
+            integradoEm: isoAgora(),
             eventoPendente: false,
           },
         },
@@ -185,15 +188,12 @@ router.get("/orders/:orderId", async (req, res) => {
     return res.status(200).json(resp);
   } catch (e) {
     console.error("❌ Erro ao retornar detalhes:", e);
-    return res
-      .status(500)
-      .json({ item: null, statusCode: 99, reasonPhrase: "Erro interno nos detalhes" });
+    return res.status(500).json({ item: null, statusCode: 99, reasonPhrase: "Erro interno nos detalhes" });
   }
 });
 
 /* =========================
-   3) STATUS (Consumer envia alterações do pedido)
-   POST /orders/:orderId/status
+   3) STATUS (POST)
 ========================= */
 router.post("/orders/:orderId/status", async (req, res) => {
   try {
@@ -211,7 +211,7 @@ router.post("/orders/:orderId/status", async (req, res) => {
           statusConsumer: body.status || null,
           justification: body.justification || null,
           statusPayload: body,
-          statusAtualizadoEm: new Date().toISOString(),
+          statusAtualizadoEm: isoAgora(),
         },
       },
       { merge: true }
