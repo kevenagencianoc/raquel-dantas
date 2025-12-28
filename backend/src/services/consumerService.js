@@ -22,32 +22,49 @@ function normalizarMetodoPagamento(pedido) {
       .toString()
       .toUpperCase();
 
-  // o manual usa exemplos com "CREDIT" e "PIX"
   if (raw.includes("CART") || raw.includes("CARD") || raw.includes("CRED")) return "CREDIT";
   if (raw.includes("DIN") || raw.includes("CASH")) return "CASH";
   return "PIX";
 }
 
-function montarItens(pedidoId, pedido) {
-  const itens = Array.isArray(pedido?.itens) ? pedido.itens : [];
+/**
+ * ✅ CORREÇÃO CRÍTICA:
+ * Seu Firestore está salvando "items" (EN) e não "itens" (PT).
+ * Aqui aceitamos os dois.
+ */
+function getListaItens(pedido) {
+  if (Array.isArray(pedido?.itens)) return pedido.itens;
+  if (Array.isArray(pedido?.items)) return pedido.items;
+  return [];
+}
 
-  return itens.map((i, idx) => {
+function montarItens(orderId, pedido) {
+  const lista = getListaItens(pedido);
+
+  return lista.map((i, idx) => {
     const qtd = Number(i.quantidade ?? i.qtd ?? 1);
-    const unitPrice = Number(i.preco ?? 0);
-    const totalPrice = Number(i.subtotal ?? unitPrice * qtd);
+    const unitPrice = Number(i.preco ?? i.unitPrice ?? 0);
+    const totalPrice = Number(i.subtotal ?? i.totalPrice ?? unitPrice * qtd);
 
     return {
       id: uuid(),
       index: idx + 1,
+
       name: i.nome ?? i.name ?? "Produto",
-      externalCode: String(i.externalCode ?? i.id ?? "0"),
+
+      // externalCode é obrigatório pro Consumer; se não tiver, usa id do seu item
+      externalCode: String(i.externalCode ?? i.codigoExterno ?? i.id ?? "0"),
+
       quantity: qtd,
-      unitPrice,       // ✅ NUMBER (manual)
-      totalPrice,      // ✅ NUMBER (manual)
+
+      // ✅ NUMBER (não objeto)
+      unitPrice,
+      totalPrice,
+
       unit: "UN",
       ean: null,
       price: totalPrice,
-      observations: i.observacoes ?? null,
+      observations: i.observacoes ?? i.obs ?? null,
       imageUrl: i.imageUrl ?? i.imagemUrl ?? i.urlImagem ?? null,
       options: null,
       uniqueId: uuid(),
@@ -58,18 +75,26 @@ function montarItens(pedidoId, pedido) {
   });
 }
 
-function montarTotal(pedido) {
-  // tenta respeitar seu resumo caso exista
-  const deliveryFee = Number(pedido?.resumo?.taxaEntrega ?? pedido?.entrega?.taxaEntrega ?? 0);
+function montarTotal(pedido, items) {
+  // se tiver resumo usa, senão calcula
+  const deliveryFee = Number(
+    pedido?.resumo?.taxaEntrega ??
+      pedido?.entrega?.taxaEntrega ??
+      pedido?.taxaEntrega ??
+      0
+  );
+
+  const subTotalFromResumo = Number(pedido?.resumo?.totalProdutos ?? 0);
+
   const subTotal =
-    Number(pedido?.resumo?.totalProdutos ?? 0) ||
-    (Array.isArray(pedido?.itens)
-      ? pedido.itens.reduce((acc, i) => acc + Number(i.preco ?? 0) * Number(i.quantidade ?? i.qtd ?? 1), 0)
-      : 0);
+    subTotalFromResumo > 0
+      ? subTotalFromResumo
+      : items.reduce((acc, it) => acc + Number(it.totalPrice ?? 0), 0);
+
+  const orderAmountFromResumo = Number(pedido?.resumo?.totalFinal ?? 0);
 
   const orderAmount =
-    Number(pedido?.resumo?.totalFinal ?? 0) ||
-    (subTotal + deliveryFee);
+    orderAmountFromResumo > 0 ? orderAmountFromResumo : subTotal + deliveryFee;
 
   return {
     subTotal,
@@ -82,7 +107,6 @@ function montarTotal(pedido) {
 
 function montarDelivery(pedido) {
   const tipo = (pedido?.entrega?.tipo || "entrega").toLowerCase();
-
   if (tipo !== "entrega") return null;
 
   const rua = pedido?.entrega?.rua || "Rua";
@@ -118,7 +142,7 @@ function montarPedidoConsumer(orderId, pedido) {
   const createdAt = pedido?.criadoEm ?? pedido?.createdAt ?? isoAgora();
 
   const items = montarItens(orderId, pedido);
-  const total = montarTotal(pedido);
+  const total = montarTotal(pedido, items);
   const method = normalizarMetodoPagamento(pedido);
 
   const phoneNumber =
@@ -133,7 +157,7 @@ function montarPedidoConsumer(orderId, pedido) {
     payments: {
       methods: [
         {
-          method,                // ✅ "PIX" | "CREDIT" | "CASH" (exemplo do manual)
+          method,
           prepaid: false,
           currency: "BRL",
           type: "OFFLINE",
@@ -163,8 +187,8 @@ function montarPedidoConsumer(orderId, pedido) {
       name: pedido?.cliente?.nome || "Cliente",
       phone: {
         number: String(phoneNumber),
-        localizer: gerarLocalizer(), // ✅ importante
-        localizerExpiration: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // ✅ importante
+        localizer: gerarLocalizer(),
+        localizerExpiration: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
       },
       documentNumber: null,
       ordersCountOnMerchant: null,
@@ -193,7 +217,15 @@ export async function obterDetalhesPedidoParaConsumer(orderId) {
   const pedido = snap.data();
   const item = montarPedidoConsumer(orderId, pedido);
 
-  // marca como enviado (pra não repetir polling)
+  // 🔥 Se não tiver itens, o Consumer vai rejeitar
+  if (!item.items || item.items.length === 0) {
+    return {
+      item: null,
+      statusCode: 99,
+      reasonPhrase: "Pedido sem itens (verifique se o Firestore usa campo 'items' ou 'itens')",
+    };
+  }
+
   await ref.set(
     {
       integracao: {
