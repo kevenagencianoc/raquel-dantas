@@ -4,12 +4,9 @@ import { obterDetalhesPedidoParaConsumer } from "../services/consumerService.js"
 
 const router = Router();
 
-/**
- * ✅ Lê token de TUDO quanto é lugar:
- * - query ?token=
- * - headers comuns do Consumer
- * - authorization Bearer
- */
+/* =========================
+   TOKEN (compatível com Consumer)
+========================= */
 function getToken(req) {
   let t =
     req.query.token ||
@@ -20,30 +17,26 @@ function getToken(req) {
     req.headers["apikey"] ||
     req.headers["authorization"];
 
-  // "Bearer xxx"
   if (typeof t === "string" && t.toLowerCase().startsWith("bearer ")) {
     t = t.slice(7).trim();
   }
-
-  // Se veio duplicado (?token=a&token=b), pega o primeiro
   if (Array.isArray(t)) t = t[0];
-
   return t;
 }
 
 function authToken(req) {
-  const tokenRecebido = getToken(req);
-  const tokenEsperado = process.env.PARTNER_TOKEN;
-
-  // Se você estiver sem env no Render, evita explodir e mostra erro claro
-  if (!tokenEsperado) return false;
-
-  return tokenRecebido && tokenRecebido === tokenEsperado;
+  const recebido = getToken(req);
+  const esperado = process.env.PARTNER_TOKEN;
+  if (!esperado) return false;
+  return recebido && recebido === esperado;
 }
 
-/**
- * GET /api/consumer/polling
- */
+/* =========================
+   GET /api/consumer/polling
+   ✅ Retorna eventos e faz ACK:
+   - muda status para consumer_notificado
+   (evita loop infinito no Consumer)
+========================= */
 router.get("/polling", async (req, res) => {
   try {
     if (!authToken(req)) {
@@ -55,32 +48,55 @@ router.get("/polling", async (req, res) => {
 
     const db = getDb();
 
+    // Pega somente pedidos "novos"
     const snap = await db
       .collection("pedidos")
       .where("integracao.status", "==", "pronto_para_enviar_consumer")
       .get();
 
     const agora = new Date().toISOString();
+    const items = [];
 
-    // ✅ id e orderId iguais (compatibilidade total)
-    const items = snap.docs.map((d) => ({
-      id: d.id,
-      orderId: d.id,
-      createdAt: agora,
-      fullCode: "PLACED",
-      code: "PLC",
-    }));
+    // ✅ MONTA EVENTOS + FAZ ACK
+    for (const d of snap.docs) {
+      const pedidoId = d.id;
+      const data = d.data();
+
+      items.push({
+        id: pedidoId,
+        orderId: pedidoId,
+        createdAt: agora,
+        fullCode: "PLACED",
+        code: "PLC",
+      });
+
+      // 🔥 ACK: marca que o Consumer já foi notificado
+      await db.collection("pedidos").doc(pedidoId).set(
+        {
+          integracao: {
+            ...(data.integracao || {}),
+            status: "consumer_notificado",
+            consumerNotificadoEm: agora,
+          },
+        },
+        { merge: true }
+      );
+    }
 
     return res.json({ items, statusCode: 0, reasonPhrase: null });
   } catch (e) {
     console.error("❌ Erro no polling:", e);
-    return res.status(500).json({ statusCode: 99, reasonPhrase: "Erro interno no polling" });
+    return res.status(500).json({
+      statusCode: 99,
+      reasonPhrase: "Erro interno no polling",
+    });
   }
 });
 
-/**
- * GET /api/consumer/orders/:id
- */
+/* =========================
+   GET /api/consumer/orders/:id
+   ✅ Retorna detalhes e marca integrado_consumer
+========================= */
 router.get("/orders/:id", async (req, res) => {
   try {
     if (!authToken(req)) {
@@ -91,8 +107,27 @@ router.get("/orders/:id", async (req, res) => {
       });
     }
 
-    const response = await obterDetalhesPedidoParaConsumer(req.params.id);
-    return res.status(200).json(response);
+    const orderId = req.params.id;
+
+    // pega detalhes no formato correto do consumerService
+    const resp = await obterDetalhesPedidoParaConsumer(orderId);
+
+    // se achou, marca como integrado
+    if (resp?.statusCode === 0 && resp?.item) {
+      const db = getDb();
+
+      await db.collection("pedidos").doc(String(orderId)).set(
+        {
+          integracao: {
+            status: "integrado_consumer",
+            integradoEm: new Date().toISOString(),
+          },
+        },
+        { merge: true }
+      );
+    }
+
+    return res.status(200).json(resp);
   } catch (e) {
     console.error("❌ Erro ao retornar detalhes:", e);
     return res.status(500).json({
@@ -103,9 +138,10 @@ router.get("/orders/:id", async (req, res) => {
   }
 });
 
-/**
- * POST /api/consumer/orders/:id/status
- */
+/* =========================
+   POST /api/consumer/orders/:id/status
+   Consumer manda status (aceito, cancelado, etc)
+========================= */
 router.post("/orders/:id/status", async (req, res) => {
   try {
     if (!authToken(req)) {
@@ -134,13 +170,17 @@ router.post("/orders/:id/status", async (req, res) => {
     return res.json({ statusCode: 0, reasonPhrase: "OK" });
   } catch (e) {
     console.error("❌ Erro ao receber status:", e);
-    return res.status(500).json({ statusCode: 99, reasonPhrase: "Erro interno no status" });
+    return res.status(500).json({
+      statusCode: 99,
+      reasonPhrase: "Erro interno no status",
+    });
   }
 });
 
-/**
- * POST /api/consumer/orders/:id/details
- */
+/* =========================
+   POST /api/consumer/orders/:id/details
+   Alguns Consumers chamam este endpoint
+========================= */
 router.post("/orders/:id/details", async (req, res) => {
   try {
     if (!authToken(req)) {
@@ -166,7 +206,10 @@ router.post("/orders/:id/details", async (req, res) => {
     return res.json({ statusCode: 0, reasonPhrase: "OK" });
   } catch (e) {
     console.error("❌ Erro no POST details:", e);
-    return res.status(500).json({ statusCode: 99, reasonPhrase: "Erro interno no details" });
+    return res.status(500).json({
+      statusCode: 99,
+      reasonPhrase: "Erro interno no details",
+    });
   }
 });
 
