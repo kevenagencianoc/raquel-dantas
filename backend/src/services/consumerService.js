@@ -38,21 +38,6 @@ function gerarLocalizer() {
   return String(Math.floor(10000000 + Math.random() * 90000000)); // 8 dígitos
 }
 
-function normalizarMetodoPagamento(pedido) {
-  const raw = (
-    pedido?.pagamento?.tipo ||
-    pedido?.pagamento?.metodo ||
-    pedido?.payment?.method ||
-    "PIX"
-  )
-    .toString()
-    .toUpperCase();
-
-  if (raw.includes("CART") || raw.includes("CARD") || raw.includes("CRED")) return "CREDIT";
-  if (raw.includes("DIN") || raw.includes("CASH")) return "CASH";
-  return "PIX";
-}
-
 function obterItens(pedido) {
   if (Array.isArray(pedido?.itens)) return pedido.itens;
   if (Array.isArray(pedido?.items)) return pedido.items;
@@ -61,13 +46,11 @@ function obterItens(pedido) {
 
 /**
  * ✅ GARANTE externalCode SEMPRE STRING (Consumer exige string)
- * - tenta achar em vários campos comuns
- * - se não achar, retorna "N/A" (evita quebrar por tipo number/undefined)
+ * tenta achar em vários campos comuns.
  */
 function normalizarExternalCode(valorPossivel) {
   if (valorPossivel === undefined || valorPossivel === null) return "";
-  const s = String(valorPossivel).trim();
-  return s;
+  return String(valorPossivel).trim();
 }
 
 function obterExternalCodeItem(i) {
@@ -86,6 +69,7 @@ function obterExternalCodeItem(i) {
     if (s) return s;
   }
 
+  // Se não achou, retorna string "N/A" (não quebra por tipo number/undefined)
   return "N/A";
 }
 
@@ -95,10 +79,9 @@ function montarItens(pedido) {
   return lista.map((i, idx) => {
     const qtd = Number(i.qtd ?? i.quantidade ?? i.quantity ?? 1);
     const unitPrice = Number(i.preco ?? i.unitPrice ?? 0);
-    const totalPrice = Number(i.subtotal ?? i.totalPrice ?? (unitPrice * qtd));
+    const totalPrice = Number(i.subtotal ?? i.totalPrice ?? unitPrice * qtd);
 
-    // ✅ externalCode como STRING (ex: "3")
-    const externalCode = obterExternalCodeItem(i);
+    const externalCode = obterExternalCodeItem(i); // ✅ string
 
     return {
       id: uuid(),
@@ -125,8 +108,8 @@ function montarItens(pedido) {
 function montarTotal(pedido, items) {
   const deliveryFee = Number(
     pedido?.resumo?.taxaEntrega ??
-    pedido?.entrega?.taxaEntrega ??
-    0
+      pedido?.entrega?.taxaEntrega ??
+      0
   );
 
   const subTotal =
@@ -134,8 +117,7 @@ function montarTotal(pedido, items) {
     items.reduce((acc, it) => acc + Number(it.totalPrice || 0), 0);
 
   const orderAmount =
-    Number(pedido?.resumo?.totalFinal) ||
-    (subTotal + deliveryFee);
+    Number(pedido?.resumo?.totalFinal) || subTotal + deliveryFee;
 
   return {
     subTotal,
@@ -157,8 +139,11 @@ function montarDelivery(pedido, createdAtISO) {
   return {
     mode: "DEFAULT",
     deliveredBy: "Partner",
-    pickupCode: pedido?.entrega?.codigoRetirada ?? "0000",
-    deliveryDateTime: normalizarDataParaISO(pedido?.entrega?.dataHoraEntrega || createdAtISO),
+    // ✅ Em DELIVERY, melhor não forçar pickupCode (alguns Consumers rejeitam)
+    pickupCode: null,
+    deliveryDateTime: normalizarDataParaISO(
+      pedido?.entrega?.dataHoraEntrega || createdAtISO
+    ),
     deliveryAddress: {
       country: "BR",
       state: pedido?.entrega?.estado || "BA",
@@ -180,12 +165,15 @@ function montarDelivery(pedido, createdAtISO) {
 }
 
 function montarPedidoConsumer(orderId, pedido) {
-  const createdAtISO = normalizarDataParaISO(pedido?.criadoEm ?? pedido?.createdAt);
-  const prepISO = normalizarDataParaISO(pedido?.preparationStartDateTime ?? createdAtISO);
+  const createdAtISO = normalizarDataParaISO(
+    pedido?.criadoEm ?? pedido?.createdAt
+  );
+  const prepISO = normalizarDataParaISO(
+    pedido?.preparationStartDateTime ?? createdAtISO
+  );
 
   const items = montarItens(pedido);
   const total = montarTotal(pedido, items);
-  const method = normalizarMetodoPagamento(pedido);
 
   const phoneNumber =
     pedido?.cliente?.whatsapp ??
@@ -194,7 +182,9 @@ function montarPedidoConsumer(orderId, pedido) {
     "00000000000";
 
   return {
+    // (não precisa duplicar benefits fora do total, mas mantive pra compatibilidade)
     benefits: total.benefits ?? 0,
+
     orderType: pedido?.entrega?.tipo === "retirada" ? "TAKEOUT" : "DELIVERY",
     salesChannel: "PARTNER",
     orderTiming: "IMMEDIATE",
@@ -209,25 +199,20 @@ function montarPedidoConsumer(orderId, pedido) {
 
     total,
 
+    /**
+     * ✅ PAGAMENTO DESATIVADO (neutro)
+     * Para o Consumer aceitar o pedido sem validar pagamento.
+     */
     payments: {
-      methods: [
-        {
-          method,
-          type: "OFFLINE",
-          currency: "BRL",
-          value: total.orderAmount,
-          prepaid: false,
-          cash: method === "CASH" ? { changeFor: Number(pedido?.pagamento?.trocoPara ?? 0) } : null,
-          card: method === "CREDIT" ? { brand: pedido?.pagamento?.bandeira ?? null } : null,
-          wallet: null,
-        },
-      ],
-      pending: total.orderAmount,
+      methods: [],
+      pending: 0,
       prepaid: 0,
     },
 
     id: String(orderId),
-    displayId: String(pedido?.numero ?? String(orderId).slice(0, 6).toUpperCase()),
+    displayId: String(
+      pedido?.numero ?? String(orderId).slice(0, 6).toUpperCase()
+    ),
 
     customer: {
       id: pedido?.cliente?.id ?? uuid(),
