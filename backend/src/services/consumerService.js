@@ -2,124 +2,203 @@ import { getDb } from "../firebaseAdmin.js";
 import crypto from "crypto";
 
 function uuid() {
-  return crypto.randomUUID();
+  return crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
 }
 
 function isoAgora() {
   return new Date().toISOString();
 }
 
-export function montarPedidoConsumer(pedidoId, pedido) {
-  const itens = pedido.itens || [];
+function gerarLocalizer() {
+  return String(Math.floor(10000000 + Math.random() * 90000000)); // 8 dígitos
+}
 
-  const items = itens.map((i, idx) => {
-    const qtd = Number(i.quantidade || i.qtd || 1);
-    const unitPrice = Number(i.preco || 0);
+function normalizarMetodoPagamento(pedido) {
+  const raw =
+    (pedido?.pagamento?.tipo ||
+      pedido?.pagamento?.metodo ||
+      pedido?.payment?.method ||
+      "PIX")
+      .toString()
+      .toUpperCase();
+
+  // o manual usa exemplos com "CREDIT" e "PIX"
+  if (raw.includes("CART") || raw.includes("CARD") || raw.includes("CRED")) return "CREDIT";
+  if (raw.includes("DIN") || raw.includes("CASH")) return "CASH";
+  return "PIX";
+}
+
+function montarItens(pedidoId, pedido) {
+  const itens = Array.isArray(pedido?.itens) ? pedido.itens : [];
+
+  return itens.map((i, idx) => {
+    const qtd = Number(i.quantidade ?? i.qtd ?? 1);
+    const unitPrice = Number(i.preco ?? 0);
+    const totalPrice = Number(i.subtotal ?? unitPrice * qtd);
 
     return {
       id: uuid(),
       index: idx + 1,
-      name: i.nome,
-      externalCode: String(i.externalCode),
+      name: i.nome ?? i.name ?? "Produto",
+      externalCode: String(i.externalCode ?? i.id ?? "0"),
       quantity: qtd,
-      unitPrice,
-      totalPrice: unitPrice * qtd,
+      unitPrice,       // ✅ NUMBER (manual)
+      totalPrice,      // ✅ NUMBER (manual)
       unit: "UN",
-      price: unitPrice * qtd,
-      observations: null,
+      ean: null,
+      price: totalPrice,
+      observations: i.observacoes ?? null,
+      imageUrl: i.imageUrl ?? i.imagemUrl ?? i.urlImagem ?? null,
       options: null,
+      uniqueId: uuid(),
+      optionsPrice: 0,
+      addition: 0,
+      scalePrices: null,
     };
   });
+}
 
-  const orderAmount = items.reduce((s, i) => s + i.totalPrice, 0);
+function montarTotal(pedido) {
+  // tenta respeitar seu resumo caso exista
+  const deliveryFee = Number(pedido?.resumo?.taxaEntrega ?? pedido?.entrega?.taxaEntrega ?? 0);
+  const subTotal =
+    Number(pedido?.resumo?.totalProdutos ?? 0) ||
+    (Array.isArray(pedido?.itens)
+      ? pedido.itens.reduce((acc, i) => acc + Number(i.preco ?? 0) * Number(i.quantidade ?? i.qtd ?? 1), 0)
+      : 0);
+
+  const orderAmount =
+    Number(pedido?.resumo?.totalFinal ?? 0) ||
+    (subTotal + deliveryFee);
 
   return {
-    id: String(pedidoId),
-    displayId: String(pedidoId),
-    orderType: pedido?.entrega?.tipo === "retirada" ? "TAKEOUT" : "DELIVERY",
-    salesChannel: "PARTNER",
-    orderTiming: "IMMEDIATE",
-    createdAt: isoAgora(),
-    preparationStartDateTime: isoAgora(),
+    subTotal,
+    deliveryFee,
+    orderAmount,
+    benefits: Number(pedido?.resumo?.benefits ?? 0),
+    additionalFees: Number(pedido?.resumo?.additionalFees ?? 0),
+  };
+}
 
+function montarDelivery(pedido) {
+  const tipo = (pedido?.entrega?.tipo || "entrega").toLowerCase();
+
+  if (tipo !== "entrega") return null;
+
+  const rua = pedido?.entrega?.rua || "Rua";
+  const numero = pedido?.entrega?.numero || "S/N";
+  const bairro = pedido?.entrega?.bairro || "Centro";
+
+  return {
+    mode: "DEFAULT",
+    deliveredBy: "Partner",
+    pickupCode: pedido?.entrega?.codigoRetirada ?? "0000",
+    deliveryDateTime: pedido?.entrega?.dataHoraEntrega ?? null,
+    deliveryAddress: {
+      country: "BR",
+      state: "BA",
+      city: "Banzaê",
+      postalCode: pedido?.entrega?.cep || "00000000",
+      streetName: rua,
+      streetNumber: numero,
+      neighborhood: bairro,
+      complement: pedido?.entrega?.complemento ?? null,
+      reference: pedido?.entrega?.referencia ?? null,
+      formattedAddress: `${rua}, ${numero} - ${bairro}`,
+      coordinates: {
+        latitude: Number(pedido?.entrega?.latitude ?? 0),
+        longitude: Number(pedido?.entrega?.longitude ?? 0),
+      },
+    },
+    observations: pedido?.observacoes ?? null,
+  };
+}
+
+function montarPedidoConsumer(orderId, pedido) {
+  const createdAt = pedido?.criadoEm ?? pedido?.createdAt ?? isoAgora();
+
+  const items = montarItens(orderId, pedido);
+  const total = montarTotal(pedido);
+  const method = normalizarMetodoPagamento(pedido);
+
+  const phoneNumber =
+    pedido?.cliente?.whatsapp ??
+    pedido?.cliente?.telefone ??
+    pedido?.customer?.phone?.number ??
+    "00000000000";
+
+  return {
+    benefits: total.benefits ?? 0,
+    orderType: pedido?.entrega?.tipo === "retirada" ? "TAKEOUT" : "DELIVERY",
+    payments: {
+      methods: [
+        {
+          method,                // ✅ "PIX" | "CREDIT" | "CASH" (exemplo do manual)
+          prepaid: false,
+          currency: "BRL",
+          type: "OFFLINE",
+          value: total.orderAmount,
+          cash: method === "CASH" ? { changeFor: Number(pedido?.pagamento?.trocoPara ?? 0) } : null,
+          card: method === "CREDIT" ? { brand: pedido?.pagamento?.bandeira ?? null } : null,
+          wallet: null,
+        },
+      ],
+      pending: total.orderAmount,
+      prepaid: 0,
+    },
     merchant: {
       id: process.env.MERCHANT_ID || "raquel-dantas",
       name: process.env.MERCHANT_NAME || "Raquel Dantas Confeitaria",
     },
-
+    salesChannel: "PARTNER",
+    picking: null,
+    orderTiming: "IMMEDIATE",
+    createdAt,
+    preparationStartDateTime: createdAt,
+    id: String(orderId),
+    displayId: String(pedido?.numero ?? String(orderId).slice(0, 6).toUpperCase()),
+    items,
     customer: {
-      id: uuid(),
+      id: pedido?.cliente?.id ?? uuid(),
       name: pedido?.cliente?.nome || "Cliente",
       phone: {
-        number: String(pedido?.cliente?.whatsapp || "0000000000"),
-        localizer: "12345678",
-        localizerExpiration: new Date(Date.now() + 3600000).toISOString(),
+        number: String(phoneNumber),
+        localizer: gerarLocalizer(), // ✅ importante
+        localizerExpiration: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // ✅ importante
       },
+      documentNumber: null,
+      ordersCountOnMerchant: null,
+      segmentation: "Cliente",
     },
-
-    items,
-
-    payments: {
-      methods: [
-        {
-          method: pedido?.pagamento?.tipo === "cartao" ? "CREDIT" : "PIX",
-          type: "OFFLINE",
-          currency: "BRL",
-          value: orderAmount,
-          prepaid: false,
-        },
-      ],
-      pending: orderAmount,
-      prepaid: 0,
-    },
-
-    total: {
-      subTotal: orderAmount,
-      deliveryFee: 0,
-      orderAmount,
-      benefits: 0,
-      additionalFees: 0,
-    },
-
-    delivery:
-      pedido?.entrega?.tipo === "entrega"
-        ? {
-            deliveredBy: "Partner",
-            deliveryAddress: {
-              streetName: pedido?.entrega?.rua || "Rua",
-              streetNumber: pedido?.entrega?.numero || "S/N",
-              neighborhood: pedido?.entrega?.bairro || "Centro",
-              city: "Banzaê",
-              state: "BA",
-              country: "BR",
-              postalCode: "00000000",
-              formattedAddress: `${pedido?.entrega?.rua || "Rua"}, ${
-                pedido?.entrega?.numero || "S/N"
-              }`,
-              coordinates: { latitude: 0, longitude: 0 },
-            },
-          }
-        : null,
-
-    extraInfo: pedido?.observacoes || null,
+    extraInfo: pedido?.observacoes ?? null,
+    additionalFees: null,
+    delivery: montarDelivery(pedido),
+    schedule: null,
+    indoor: null,
+    takeout: null,
+    additionalInfometadata: null,
+    total,
   };
 }
 
 export async function obterDetalhesPedidoParaConsumer(orderId) {
   const db = getDb();
-  const ref = db.collection("pedidos").doc(orderId);
+  const ref = db.collection("pedidos").doc(String(orderId));
   const snap = await ref.get();
 
   if (!snap.exists) {
-    return { item: null, statusCode: 404, reasonPhrase: "Pedido não encontrado" };
+    return { item: null, statusCode: 2, reasonPhrase: "Pedido não encontrado" };
   }
 
   const pedido = snap.data();
   const item = montarPedidoConsumer(orderId, pedido);
 
+  // marca como enviado (pra não repetir polling)
   await ref.set(
     {
       integracao: {
+        ...(pedido.integracao || {}),
+        detalhesConsultadosEm: isoAgora(),
         status: "enviado_para_consumer",
         enviadoEm: isoAgora(),
       },
