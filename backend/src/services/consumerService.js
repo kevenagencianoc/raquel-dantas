@@ -1,6 +1,9 @@
 import { getDb } from "../firebaseAdmin.js";
 import crypto from "crypto";
 
+/* =========================
+   HELPERS
+========================= */
 function uuid() {
   return crypto.randomUUID
     ? crypto.randomUUID()
@@ -20,13 +23,12 @@ function normalizarDataParaISO(valor) {
   }
 
   if (typeof valor?.toDate === "function") return valor.toDate().toISOString();
-
   if (valor instanceof Date) return valor.toISOString();
   if (typeof valor === "number") return new Date(valor).toISOString();
 
   if (typeof valor === "string") {
     const d = new Date(valor);
-    if (!Number.isNaN(d.getTime())) return d.toISOString();
+    if (!isNaN(d.getTime())) return d.toISOString();
   }
 
   return isoAgora();
@@ -36,15 +38,13 @@ function gerarLocalizer() {
   return String(Math.floor(10000000 + Math.random() * 90000000));
 }
 
+/* =========================
+   ITENS
+========================= */
 function obterItens(pedido) {
   if (Array.isArray(pedido?.itens)) return pedido.itens;
   if (Array.isArray(pedido?.items)) return pedido.items;
   return [];
-}
-
-function normalizarExternalCode(valorPossivel) {
-  if (valorPossivel === undefined || valorPossivel === null) return "";
-  return String(valorPossivel).trim();
 }
 
 function obterExternalCodeItem(i) {
@@ -55,129 +55,117 @@ function obterExternalCodeItem(i) {
     i?.pdv,
     i?.codigo,
     i?.idProduto,
-    i?.productCode,
   ];
 
   for (const c of candidatos) {
-    const s = normalizarExternalCode(c);
-    if (s) return s;
+    if (c !== undefined && c !== null && String(c).trim() !== "") {
+      return String(c).trim();
+    }
   }
 
-  return "N/A";
+  return "1"; // ⚠️ nunca vazio
 }
 
 function montarItens(pedido) {
   const lista = obterItens(pedido);
 
   return lista.map((i, idx) => {
-    const qtd = Number(i.qtd ?? i.quantidade ?? i.quantity ?? 1);
+    const qtd = Number(i.qtd ?? i.quantidade ?? 1);
     const unitPrice = Number(i.preco ?? i.unitPrice ?? 0);
-    const totalPrice = Number(i.subtotal ?? i.totalPrice ?? unitPrice * qtd);
-    const externalCode = obterExternalCodeItem(i);
+    const totalPrice = unitPrice * qtd;
 
     return {
       id: uuid(),
       index: idx + 1,
       name: i.nome ?? i.name ?? "Produto",
-      externalCode,
+      externalCode: obterExternalCodeItem(i),
       quantity: qtd,
       unitPrice,
       totalPrice,
-      unit: i.unit ?? "UN",
-      ean: i.ean ?? null,
+      unit: "UN",
+      ean: null,
       price: totalPrice,
-      observations: i.observacoes ?? i.observations ?? null,
-      imageUrl: i.imageUrl ?? null,
+      observations: i.observacoes ?? null,
+      imageUrl: null,
       options: null,
       uniqueId: uuid(),
-      optionsPrice: Number(i.optionsPrice ?? 0),
-      addition: Number(i.addition ?? 0),
-      scalePrices: i.scalePrices ?? null,
+      optionsPrice: 0,
+      addition: 0,
+      scalePrices: null,
     };
   });
 }
 
-function montarTotal(pedido, items) {
-  const deliveryFee = Number(pedido?.resumo?.taxaEntrega ?? pedido?.entrega?.taxaEntrega ?? 0);
-
-  const subTotal =
-    Number(pedido?.resumo?.totalProdutos) ||
-    items.reduce((acc, it) => acc + Number(it.totalPrice || 0), 0);
-
-  const orderAmount = Number(pedido?.resumo?.totalFinal) || subTotal + deliveryFee;
+/* =========================
+   TOTAL
+========================= */
+function montarTotal(items) {
+  const subTotal = items.reduce((s, i) => s + Number(i.totalPrice || 0), 0);
 
   return {
     subTotal,
-    deliveryFee,
-    orderAmount,
-    benefits: Number(pedido?.resumo?.benefits ?? 0),
-    additionalFees: Number(pedido?.resumo?.additionalFees ?? 0),
+    deliveryFee: 0,
+    orderAmount: subTotal,
+    benefits: 0,
+    additionalFees: 0,
   };
 }
 
+/* =========================
+   DELIVERY
+========================= */
 function montarDelivery(pedido, createdAtISO) {
-  const tipo = (pedido?.entrega?.tipo || "entrega").toLowerCase();
-  if (tipo === "retirada") return null;
-
-  const rua = pedido?.entrega?.rua || "Rua";
-  const numero = pedido?.entrega?.numero || "S/N";
-  const bairro = pedido?.entrega?.bairro || "Centro";
-
   return {
     mode: "DEFAULT",
-    deliveredBy: "MERCHANT", // ✅ mais compatível
-    pickupCode: "",          // ✅ evita null em DELIVERY
-    deliveryDateTime: normalizarDataParaISO(pedido?.entrega?.dataHoraEntrega || createdAtISO),
+    deliveredBy: "MERCHANT", // ⚠️ obrigatório para aparecer
+    pickupCode: "",          // ⚠️ não pode ser null
+    deliveryDateTime: createdAtISO,
     deliveryAddress: {
       country: "BR",
       state: pedido?.entrega?.estado || "BA",
       city: pedido?.entrega?.cidade || "Banzaê",
       postalCode: pedido?.entrega?.cep || "00000000",
-      streetName: rua,
-      streetNumber: numero,
-      neighborhood: bairro,
-      complement: pedido?.entrega?.complemento ?? null,
-      reference: pedido?.entrega?.referencia ?? null,
-      formattedAddress: `${rua}, ${numero} - ${bairro}`,
-      coordinates: {
-        latitude: Number(pedido?.entrega?.latitude ?? 0),
-        longitude: Number(pedido?.entrega?.longitude ?? 0),
-      },
+      streetName: pedido?.entrega?.rua || "Rua",
+      streetNumber: pedido?.entrega?.numero || "S/N",
+      neighborhood: pedido?.entrega?.bairro || "Centro",
+      complement: null,
+      reference: null,
+      formattedAddress: "Entrega",
+      coordinates: { latitude: 0, longitude: 0 },
     },
-    observations: pedido?.observacoes ?? null,
+    observations: null,
   };
 }
 
+/* =========================
+   PEDIDO CONSUMER (FINAL)
+========================= */
 function montarPedidoConsumer(orderId, pedido) {
   const createdAtISO = normalizarDataParaISO(pedido?.criadoEm ?? pedido?.createdAt);
-  const prepISO = normalizarDataParaISO(pedido?.preparationStartDateTime ?? createdAtISO);
-
   const items = montarItens(pedido);
-  const total = montarTotal(pedido, items);
+  const total = montarTotal(items);
 
-  const phoneNumber =
-    pedido?.cliente?.whatsapp ??
-    pedido?.cliente?.telefone ??
-    pedido?.customer?.phone?.number ??
-    "00000000000";
+  // 🔥 DISPLAY ID OBRIGATORIAMENTE NUMÉRICO
+  const displayId =
+    String(pedido?.numero ?? "").replace(/\D/g, "") ||
+    String(Math.floor(1000 + Math.random() * 9000));
 
   return {
-    benefits: total.benefits ?? 0,
-    orderType: pedido?.entrega?.tipo === "retirada" ? "TAKEOUT" : "DELIVERY",
+    orderType: "DELIVERY",
     salesChannel: "PARTNER",
     orderTiming: "IMMEDIATE",
 
     createdAt: createdAtISO,
-    preparationStartDateTime: prepISO,
+    preparationStartDateTime: createdAtISO,
 
     merchant: {
-      id: process.env.MERCHANT_ID || "raquel-dantas",
-      name: process.env.MERCHANT_NAME || "Raquel Dantas Confeitaria",
+      id: "raquel-dantas",
+      name: "Raquel Dantas Confeitaria",
     },
 
     total,
 
-    // ✅ Pagamento "dummy" para passar validação interna do Consumer
+    // ⚠️ PAGAMENTO DUMMY (OBRIGATÓRIO)
     payments: {
       methods: [
         {
@@ -185,10 +173,6 @@ function montarPedidoConsumer(orderId, pedido) {
           type: "PENDING",
           currency: "BRL",
           value: 0,
-          prepaid: false,
-          cash: null,
-          card: null,
-          wallet: null,
         },
       ],
       pending: 0,
@@ -196,35 +180,38 @@ function montarPedidoConsumer(orderId, pedido) {
     },
 
     id: String(orderId),
-    displayId: String(pedido?.numero ?? String(orderId).slice(0, 6).toUpperCase()),
+    displayId, // ⚠️ se não for número, NÃO APARECE NA FILA
 
     customer: {
-      id: pedido?.cliente?.id ?? uuid(),
+      id: uuid(),
       name: pedido?.cliente?.nome || "Cliente",
       phone: {
-        number: String(phoneNumber),
+        number: "000000000",
         localizer: gerarLocalizer(),
-        localizerExpiration: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        localizerExpiration: isoAgora(),
       },
-      documentNumber: pedido?.cliente?.documento ?? null,
-      ordersCountOnMerchant: null,
-      segmentation: "Cliente",
+      documentNumber: null,
+      ordersCountOnMerchant: 0,
     },
 
     delivery: montarDelivery(pedido, createdAtISO),
+
     picking: null,
     schedule: null,
     indoor: null,
     takeout: null,
 
     items,
-    extraInfo: pedido?.observacoes ?? null,
 
+    extraInfo: null,
     additionalFees: null,
     additionalInfometadata: null,
   };
 }
 
+/* =========================
+   EXPORT
+========================= */
 export async function obterDetalhesPedidoParaConsumer(orderId) {
   const db = getDb();
   const ref = db.collection("pedidos").doc(String(orderId));
@@ -244,9 +231,8 @@ export async function obterDetalhesPedidoParaConsumer(orderId) {
   await ref.set(
     {
       integracao: {
-        ...(pedido.integracao || {}),
-        detalhesConsultadosEm: isoAgora(),
-        enviadoEm: isoAgora(),
+        integradoEm: isoAgora(),
+        status: "integrado_consumer",
       },
     },
     { merge: true }
