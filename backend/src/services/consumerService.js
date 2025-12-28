@@ -9,8 +9,50 @@ function isoAgora() {
   return new Date().toISOString();
 }
 
+/**
+ * ✅ Normaliza datas vindas do Firestore:
+ * - Timestamp (obj com _seconds/_nanoseconds)
+ * - Date
+ * - number (ms)
+ * - string
+ * Retorna ISO string
+ */
+function normalizarDataParaISO(valor) {
+  if (!valor) return isoAgora();
+
+  // Firestore Timestamp "serializado" (como no seu JSON)
+  if (typeof valor === "object" && valor._seconds) {
+    const ms = valor._seconds * 1000 + Math.floor((valor._nanoseconds || 0) / 1e6);
+    return new Date(ms).toISOString();
+  }
+
+  // Firestore Timestamp real (tem toDate)
+  if (typeof valor === "object" && typeof valor.toDate === "function") {
+    return valor.toDate().toISOString();
+  }
+
+  // Date
+  if (valor instanceof Date) {
+    return valor.toISOString();
+  }
+
+  // number (ms)
+  if (typeof valor === "number") {
+    return new Date(valor).toISOString();
+  }
+
+  // string
+  if (typeof valor === "string") {
+    const d = new Date(valor);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+    return isoAgora();
+  }
+
+  return isoAgora();
+}
+
 function gerarLocalizer() {
-  return String(Math.floor(10000000 + Math.random() * 90000000)); // 8 dígitos
+  return String(Math.floor(10000000 + Math.random() * 90000000));
 }
 
 function normalizarMetodoPagamento(pedido) {
@@ -27,11 +69,6 @@ function normalizarMetodoPagamento(pedido) {
   return "PIX";
 }
 
-/**
- * ✅ CORREÇÃO CRÍTICA:
- * Seu Firestore está salvando "items" (EN) e não "itens" (PT).
- * Aqui aceitamos os dois.
- */
 function getListaItens(pedido) {
   if (Array.isArray(pedido?.itens)) return pedido.itens;
   if (Array.isArray(pedido?.items)) return pedido.items;
@@ -49,18 +86,11 @@ function montarItens(orderId, pedido) {
     return {
       id: uuid(),
       index: idx + 1,
-
       name: i.nome ?? i.name ?? "Produto",
-
-      // externalCode é obrigatório pro Consumer; se não tiver, usa id do seu item
       externalCode: String(i.externalCode ?? i.codigoExterno ?? i.id ?? "0"),
-
       quantity: qtd,
-
-      // ✅ NUMBER (não objeto)
-      unitPrice,
-      totalPrice,
-
+      unitPrice,     // ✅ NUMBER
+      totalPrice,    // ✅ NUMBER
       unit: "UN",
       ean: null,
       price: totalPrice,
@@ -76,7 +106,6 @@ function montarItens(orderId, pedido) {
 }
 
 function montarTotal(pedido, items) {
-  // se tiver resumo usa, senão calcula
   const deliveryFee = Number(
     pedido?.resumo?.taxaEntrega ??
       pedido?.entrega?.taxaEntrega ??
@@ -92,7 +121,6 @@ function montarTotal(pedido, items) {
       : items.reduce((acc, it) => acc + Number(it.totalPrice ?? 0), 0);
 
   const orderAmountFromResumo = Number(pedido?.resumo?.totalFinal ?? 0);
-
   const orderAmount =
     orderAmountFromResumo > 0 ? orderAmountFromResumo : subTotal + deliveryFee;
 
@@ -105,7 +133,7 @@ function montarTotal(pedido, items) {
   };
 }
 
-function montarDelivery(pedido) {
+function montarDelivery(pedido, createdAtISO) {
   const tipo = (pedido?.entrega?.tipo || "entrega").toLowerCase();
   if (tipo !== "entrega") return null;
 
@@ -113,11 +141,16 @@ function montarDelivery(pedido) {
   const numero = pedido?.entrega?.numero || "S/N";
   const bairro = pedido?.entrega?.bairro || "Centro";
 
+  // ✅ garante um deliveryDateTime válido
+  const deliveryDateTimeISO = normalizarDataParaISO(
+    pedido?.entrega?.dataHoraEntrega || createdAtISO
+  );
+
   return {
     mode: "DEFAULT",
     deliveredBy: "Partner",
     pickupCode: pedido?.entrega?.codigoRetirada ?? "0000",
-    deliveryDateTime: pedido?.entrega?.dataHoraEntrega ?? null,
+    deliveryDateTime: deliveryDateTimeISO,
     deliveryAddress: {
       country: "BR",
       state: "BA",
@@ -139,7 +172,8 @@ function montarDelivery(pedido) {
 }
 
 function montarPedidoConsumer(orderId, pedido) {
-  const createdAt = pedido?.criadoEm ?? pedido?.createdAt ?? isoAgora();
+  const createdAtISO = normalizarDataParaISO(pedido?.criadoEm ?? pedido?.createdAt);
+  const prepStartISO = normalizarDataParaISO(pedido?.preparationStartDateTime ?? createdAtISO);
 
   const items = montarItens(orderId, pedido);
   const total = montarTotal(pedido, items);
@@ -177,8 +211,8 @@ function montarPedidoConsumer(orderId, pedido) {
     salesChannel: "PARTNER",
     picking: null,
     orderTiming: "IMMEDIATE",
-    createdAt,
-    preparationStartDateTime: createdAt,
+    createdAt: createdAtISO,                 // ✅ ISO
+    preparationStartDateTime: prepStartISO,  // ✅ ISO
     id: String(orderId),
     displayId: String(pedido?.numero ?? String(orderId).slice(0, 6).toUpperCase()),
     items,
@@ -196,7 +230,7 @@ function montarPedidoConsumer(orderId, pedido) {
     },
     extraInfo: pedido?.observacoes ?? null,
     additionalFees: null,
-    delivery: montarDelivery(pedido),
+    delivery: montarDelivery(pedido, createdAtISO), // ✅ deliveryDateTime preenchido
     schedule: null,
     indoor: null,
     takeout: null,
@@ -217,12 +251,11 @@ export async function obterDetalhesPedidoParaConsumer(orderId) {
   const pedido = snap.data();
   const item = montarPedidoConsumer(orderId, pedido);
 
-  // 🔥 Se não tiver itens, o Consumer vai rejeitar
   if (!item.items || item.items.length === 0) {
     return {
       item: null,
       statusCode: 99,
-      reasonPhrase: "Pedido sem itens (verifique se o Firestore usa campo 'items' ou 'itens')",
+      reasonPhrase: "Pedido sem itens (verifique campo items/itens no Firestore)",
     };
   }
 
