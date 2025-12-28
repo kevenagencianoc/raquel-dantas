@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { getDb } from "../firebaseAdmin.js";
 import { obterDetalhesPedidoParaConsumer } from "../services/consumerService.js";
+import crypto from "crypto";
+import admin from "firebase-admin";
 
 const router = Router();
 
@@ -12,11 +14,14 @@ function getToken(req) {
     req.headers["x-partner-token"] ||
     req.headers["authorization"];
 
+  // Se veio como "Bearer xxx"
   if (typeof t === "string" && t.toLowerCase().startsWith("bearer ")) {
     t = t.slice(7).trim();
   }
 
+  // Se veio duplicado na query (?token=a&token=b)
   if (Array.isArray(t)) t = t[0];
+
   return t;
 }
 
@@ -26,8 +31,45 @@ function authToken(req) {
 }
 
 /**
+ * 🔎 DEBUG (temporário)
+ * GET /api/consumer/debug
+ * Mostra qual projectId o backend está usando + 5 primeiros IDs de pedidos.
+ */
+router.get("/debug", async (req, res) => {
+  try {
+    // Se você quiser proteger com token, descomente:
+    // if (!authToken(req)) {
+    //   return res.status(401).json({ statusCode: 1, reasonPhrase: "Token inválido" });
+    // }
+
+    const db = getDb();
+    const snap = await db.collection("pedidos").limit(5).get();
+    const ids = snap.docs.map((d) => d.id);
+
+    return res.json({
+      projectId: admin.app().options.projectId,
+      primeirosPedidos: ids,
+      statusCode: 0,
+      reasonPhrase: null,
+    });
+  } catch (e) {
+    console.error("❌ Erro no debug:", e);
+    return res.status(500).json({
+      statusCode: 99,
+      reasonPhrase: "Erro interno no debug",
+      erro: e.message,
+    });
+  }
+});
+
+/**
+ * ✅ POLLING
  * GET /api/consumer/polling
  * Retorna eventos somente para pedidos "pronto_para_enviar_consumer"
+ *
+ * ⚠️ IMPORTANTE:
+ * - id = ID DO EVENTO (use UUID)
+ * - orderId = ID DO PEDIDO (ID do documento Firestore)
  */
 router.get("/polling", async (req, res) => {
   try {
@@ -43,9 +85,9 @@ router.get("/polling", async (req, res) => {
       .get();
 
     const items = snap.docs.map((d) => ({
-      id: d.id,
-      orderId: d.id,
-      createdAt: new Date().toISOString(), // UTC ISO
+      id: crypto.randomUUID(),  // ✅ evento (não pode confundir com pedido)
+      orderId: d.id,            // ✅ pedido (TEM que ser o ID do Firestore)
+      createdAt: new Date().toISOString(),
       fullCode: "PLACED",
       code: "PLC",
     }));
@@ -58,8 +100,8 @@ router.get("/polling", async (req, res) => {
 });
 
 /**
+ * ✅ DETALHES DO PEDIDO (FORMATO DO MANUAL)
  * GET /api/consumer/orders/:orderId
- * Retorna detalhes do pedido (FORMATO DO MANUAL)
  */
 router.get("/orders/:orderId", async (req, res) => {
   try {
@@ -71,7 +113,11 @@ router.get("/orders/:orderId", async (req, res) => {
     return res.status(200).json(response);
   } catch (e) {
     console.error("❌ Erro ao retornar detalhes:", e);
-    return res.status(500).json({ item: null, statusCode: 99, reasonPhrase: "Erro interno nos detalhes" });
+    return res.status(500).json({
+      item: null,
+      statusCode: 99,
+      reasonPhrase: "Erro interno nos detalhes",
+    });
   }
 });
 
@@ -111,6 +157,7 @@ router.post("/orders/:orderId/status", async (req, res) => {
 /**
  * POST /api/consumer/orders/:orderId/details
  * Alguns Consumers chamam esse endpoint.
+ * Vamos aceitar e salvar no Firestore para debug.
  */
 router.post("/orders/:orderId/details", async (req, res) => {
   try {
