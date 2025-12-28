@@ -1,10 +1,6 @@
 import { getDb } from "../firebaseAdmin.js";
 import crypto from "crypto";
 
-/* =========================
-   Helpers
-========================= */
-
 function uuid() {
   return crypto.randomUUID
     ? crypto.randomUUID()
@@ -15,9 +11,6 @@ function isoAgora() {
   return new Date().toISOString();
 }
 
-/**
- * Normaliza datas vindas do Firestore
- */
 function normalizarDataParaISO(valor) {
   if (!valor) return isoAgora();
 
@@ -27,13 +20,10 @@ function normalizarDataParaISO(valor) {
     return new Date(ms).toISOString();
   }
 
-  // Timestamp real
-  if (typeof valor?.toDate === "function") {
-    return valor.toDate().toISOString();
-  }
+  // Timestamp real (Admin SDK)
+  if (typeof valor?.toDate === "function") return valor.toDate().toISOString();
 
   if (valor instanceof Date) return valor.toISOString();
-
   if (typeof valor === "number") return new Date(valor).toISOString();
 
   if (typeof valor === "string") {
@@ -45,12 +35,8 @@ function normalizarDataParaISO(valor) {
 }
 
 function gerarLocalizer() {
-  return String(Math.floor(10000000 + Math.random() * 90000000));
+  return String(Math.floor(10000000 + Math.random() * 90000000)); // 8 dígitos
 }
-
-/* =========================
-   Normalizações
-========================= */
 
 function normalizarMetodoPagamento(pedido) {
   const raw = (
@@ -62,12 +48,8 @@ function normalizarMetodoPagamento(pedido) {
     .toString()
     .toUpperCase();
 
-  if (raw.includes("CART") || raw.includes("CARD") || raw.includes("CRED")) {
-    return "CREDIT";
-  }
-  if (raw.includes("DIN") || raw.includes("CASH")) {
-    return "CASH";
-  }
+  if (raw.includes("CART") || raw.includes("CARD") || raw.includes("CRED")) return "CREDIT";
+  if (raw.includes("DIN") || raw.includes("CASH")) return "CASH";
   return "PIX";
 }
 
@@ -77,24 +59,23 @@ function obterItens(pedido) {
   return [];
 }
 
-/* =========================
-   Montagem dos itens
-   🔥 externalCode = NUMBER
-========================= */
-
 function montarItens(pedido) {
   const lista = obterItens(pedido);
 
   return lista.map((i, idx) => {
     const qtd = Number(i.qtd ?? i.quantidade ?? 1);
     const unitPrice = Number(i.preco ?? i.unitPrice ?? 0);
-    const totalPrice = Number(i.subtotal ?? unitPrice * qtd);
+    const totalPrice = Number(i.subtotal ?? (unitPrice * qtd));
+
+    // 🔥 externalCode como NUMBER (se vier vazio, vira 0)
+    const ext = Number(i.externalCode);
+    const externalCode = Number.isFinite(ext) ? ext : 0;
 
     return {
-      id: uuid(),
+      id: uuid(),                 // obrigatório :contentReference[oaicite:7]{index=7}
       index: idx + 1,
       name: i.nome ?? i.name ?? "Produto",
-      externalCode: Number(i.externalCode), // ✅ CORREÇÃO DEFINITIVA
+      externalCode,
       quantity: qtd,
       unitPrice,
       totalPrice,
@@ -112,15 +93,11 @@ function montarItens(pedido) {
   });
 }
 
-/* =========================
-   Totais
-========================= */
-
 function montarTotal(pedido, items) {
   const deliveryFee = Number(
     pedido?.resumo?.taxaEntrega ??
-      pedido?.entrega?.taxaEntrega ??
-      0
+    pedido?.entrega?.taxaEntrega ??
+    0
   );
 
   const subTotal =
@@ -129,23 +106,20 @@ function montarTotal(pedido, items) {
 
   const orderAmount =
     Number(pedido?.resumo?.totalFinal) ||
-    subTotal + deliveryFee;
+    (subTotal + deliveryFee);
 
   return {
     subTotal,
     deliveryFee,
     orderAmount,
-    benefits: 0,
-    additionalFees: 0,
+    benefits: Number(pedido?.resumo?.benefits ?? 0),
+    additionalFees: Number(pedido?.resumo?.additionalFees ?? 0),
   };
 }
 
-/* =========================
-   Delivery
-========================= */
-
 function montarDelivery(pedido, createdAtISO) {
-  if (pedido?.entrega?.tipo === "retirada") return null;
+  const tipo = (pedido?.entrega?.tipo || "entrega").toLowerCase();
+  if (tipo === "retirada") return null;
 
   const rua = pedido?.entrega?.rua || "Rua";
   const numero = pedido?.entrega?.numero || "S/N";
@@ -154,58 +128,68 @@ function montarDelivery(pedido, createdAtISO) {
   return {
     mode: "DEFAULT",
     deliveredBy: "Partner",
-    pickupCode: "0000",
-    deliveryDateTime: normalizarDataParaISO(
-      pedido?.entrega?.dataHoraEntrega || createdAtISO
-    ),
+    pickupCode: pedido?.entrega?.codigoRetirada ?? "0000",
+    deliveryDateTime: normalizarDataParaISO(pedido?.entrega?.dataHoraEntrega || createdAtISO),
     deliveryAddress: {
       country: "BR",
-      state: "BA",
-      city: "Banzaê",
-      postalCode: "00000000",
+      state: pedido?.entrega?.estado || "BA",
+      city: pedido?.entrega?.cidade || "Banzaê",
+      postalCode: pedido?.entrega?.cep || "00000000",
       streetName: rua,
       streetNumber: numero,
       neighborhood: bairro,
-      complement: null,
-      reference: null,
+      complement: pedido?.entrega?.complemento ?? null,
+      reference: pedido?.entrega?.referencia ?? null,
       formattedAddress: `${rua}, ${numero} - ${bairro}`,
       coordinates: {
-        latitude: 0,
-        longitude: 0,
+        latitude: Number(pedido?.entrega?.latitude ?? 0),
+        longitude: Number(pedido?.entrega?.longitude ?? 0),
       },
     },
     observations: pedido?.observacoes ?? null,
   };
 }
 
-/* =========================
-   Pedido FINAL Consumer
-========================= */
-
 function montarPedidoConsumer(orderId, pedido) {
-  const createdAtISO = normalizarDataParaISO(
-    pedido?.criadoEm ?? pedido?.createdAt
-  );
+  const createdAtISO = normalizarDataParaISO(pedido?.criadoEm ?? pedido?.createdAt);
+  const prepISO = normalizarDataParaISO(pedido?.preparationStartDateTime ?? createdAtISO);
 
   const items = montarItens(pedido);
   const total = montarTotal(pedido, items);
   const method = normalizarMetodoPagamento(pedido);
 
+  const phoneNumber =
+    pedido?.cliente?.whatsapp ??
+    pedido?.cliente?.telefone ??
+    pedido?.customer?.phone?.number ??
+    "00000000000";
+
   return {
-    benefits: 0,
-    orderType:
-      pedido?.entrega?.tipo === "retirada" ? "TAKEOUT" : "DELIVERY",
+    benefits: total.benefits ?? 0,
+    orderType: pedido?.entrega?.tipo === "retirada" ? "TAKEOUT" : "DELIVERY",
+    salesChannel: "PARTNER",
+    orderTiming: "IMMEDIATE",
+
+    createdAt: createdAtISO,
+    preparationStartDateTime: prepISO,
+
+    merchant: {
+      id: process.env.MERCHANT_ID || "raquel-dantas",
+      name: process.env.MERCHANT_NAME || "Raquel Dantas Confeitaria",
+    },
+
+    total,
 
     payments: {
       methods: [
         {
           method,
-          prepaid: false,
-          currency: "BRL",
           type: "OFFLINE",
+          currency: "BRL",
           value: total.orderAmount,
-          cash: method === "CASH" ? { changeFor: 0 } : null,
-          card: method === "CREDIT" ? { brand: null } : null,
+          prepaid: false,
+          cash: method === "CASH" ? { changeFor: Number(pedido?.pagamento?.trocoPara ?? 0) } : null,
+          card: method === "CREDIT" ? { brand: pedido?.pagamento?.bandeira ?? null } : null,
           wallet: null,
         },
       ],
@@ -213,53 +197,35 @@ function montarPedidoConsumer(orderId, pedido) {
       prepaid: 0,
     },
 
-    merchant: {
-      id: process.env.MERCHANT_ID || "raquel-dantas",
-      name: process.env.MERCHANT_NAME || "Raquel Dantas Confeitaria",
-    },
-
-    salesChannel: "PARTNER",
-    orderTiming: "IMMEDIATE",
-    createdAt: createdAtISO,
-    preparationStartDateTime: createdAtISO,
-
     id: String(orderId),
-    displayId: String(orderId).slice(0, 6).toUpperCase(),
-
-    items,
+    displayId: String(pedido?.numero ?? String(orderId).slice(0, 6).toUpperCase()),
 
     customer: {
-      id: uuid(),
+      id: pedido?.cliente?.id ?? uuid(),
       name: pedido?.cliente?.nome || "Cliente",
       phone: {
-        number: String(
-          pedido?.cliente?.whatsapp || pedido?.cliente?.telefone || "00000000000"
-        ),
+        number: String(phoneNumber),
         localizer: gerarLocalizer(),
-        localizerExpiration: new Date(
-          Date.now() + 60 * 60 * 1000
-        ).toISOString(),
+        localizerExpiration: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
       },
-      documentNumber: null,
+      documentNumber: pedido?.cliente?.documento ?? null,
       ordersCountOnMerchant: null,
       segmentation: "Cliente",
     },
 
-    extraInfo: pedido?.observacoes ?? null,
-    additionalFees: null,
     delivery: montarDelivery(pedido, createdAtISO),
+    picking: null,
     schedule: null,
     indoor: null,
     takeout: null,
-    additionalInfometadata: null,
 
-    total,
+    items,
+    extraInfo: pedido?.observacoes ?? null,
+
+    additionalFees: null,
+    additionalInfometadata: null,
   };
 }
-
-/* =========================
-   EXPORT PRINCIPAL
-========================= */
 
 export async function obterDetalhesPedidoParaConsumer(orderId) {
   const db = getDb();
@@ -274,18 +240,15 @@ export async function obterDetalhesPedidoParaConsumer(orderId) {
   const item = montarPedidoConsumer(orderId, pedido);
 
   if (!item.items || item.items.length === 0) {
-    return {
-      item: null,
-      statusCode: 99,
-      reasonPhrase: "Pedido sem itens",
-    };
+    return { item: null, statusCode: 99, reasonPhrase: "Pedido sem itens" };
   }
 
+  // marca auditoria
   await ref.set(
     {
       integracao: {
         ...(pedido.integracao || {}),
-        status: "enviado_para_consumer",
+        detalhesConsultadosEm: isoAgora(),
         enviadoEm: isoAgora(),
       },
     },

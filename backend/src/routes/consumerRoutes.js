@@ -5,7 +5,7 @@ import { obterDetalhesPedidoParaConsumer } from "../services/consumerService.js"
 const router = Router();
 
 /* =========================
-   TOKEN (compatível com Consumer)
+   TOKEN (Consumer aceita query e headers)
 ========================= */
 function getToken(req) {
   let t =
@@ -27,37 +27,30 @@ function getToken(req) {
 function authToken(req) {
   const recebido = getToken(req);
   const esperado = process.env.PARTNER_TOKEN;
-  if (!esperado) return false;
-  return recebido && recebido === esperado;
+  return !!(esperado && recebido && recebido === esperado);
 }
 
 /* =========================
-   GET /api/consumer/polling
-   ✅ Retorna eventos e faz ACK:
-   - muda status para consumer_notificado
-   (evita loop infinito no Consumer)
+   1) POLLING (Consumer consulta eventos)
+   Manual: items[{id, orderId, createdAt ISO, fullCode, code}] + statusCode :contentReference[oaicite:2]{index=2}
 ========================= */
 router.get("/polling", async (req, res) => {
   try {
     if (!authToken(req)) {
-      return res.status(401).json({
-        statusCode: 1,
-        reasonPhrase: "Token inválido (polling)",
-      });
+      return res.status(401).json({ statusCode: 1, reasonPhrase: "Token inválido" });
     }
 
     const db = getDb();
 
-    // Pega somente pedidos "novos"
+    // Somente pedidos "novos"
     const snap = await db
       .collection("pedidos")
       .where("integracao.status", "==", "pronto_para_enviar_consumer")
       .get();
 
-    const agora = new Date().toISOString();
+    const agoraISO = new Date().toISOString();
     const items = [];
 
-    // ✅ MONTA EVENTOS + FAZ ACK
     for (const d of snap.docs) {
       const pedidoId = d.id;
       const data = d.data();
@@ -65,18 +58,18 @@ router.get("/polling", async (req, res) => {
       items.push({
         id: pedidoId,
         orderId: pedidoId,
-        createdAt: agora,
+        createdAt: agoraISO,
         fullCode: "PLACED",
         code: "PLC",
       });
 
-      // 🔥 ACK: marca que o Consumer já foi notificado
+      // ✅ ACK: evita o Consumer ficar repetindo o mesmo pedido
       await db.collection("pedidos").doc(pedidoId).set(
         {
           integracao: {
             ...(data.integracao || {}),
             status: "consumer_notificado",
-            consumerNotificadoEm: agora,
+            consumerNotificadoEm: agoraISO,
           },
         },
         { merge: true }
@@ -86,36 +79,27 @@ router.get("/polling", async (req, res) => {
     return res.json({ items, statusCode: 0, reasonPhrase: null });
   } catch (e) {
     console.error("❌ Erro no polling:", e);
-    return res.status(500).json({
-      statusCode: 99,
-      reasonPhrase: "Erro interno no polling",
-    });
+    return res.status(500).json({ statusCode: 99, reasonPhrase: "Erro interno no polling" });
   }
 });
 
 /* =========================
-   GET /api/consumer/orders/:id
-   ✅ Retorna detalhes e marca integrado_consumer
+   2) GET DETALHES DO PEDIDO (Consumer consulta)
+   Manual: GET detalhes retorna { item: {...}, statusCode, reasonPhrase } :contentReference[oaicite:3]{index=3}
 ========================= */
-router.get("/orders/:id", async (req, res) => {
+router.get("/orders/:orderId", async (req, res) => {
   try {
     if (!authToken(req)) {
-      return res.status(401).json({
-        item: null,
-        statusCode: 1,
-        reasonPhrase: "Token inválido (orders)",
-      });
+      return res.status(401).json({ item: null, statusCode: 1, reasonPhrase: "Token inválido" });
     }
 
-    const orderId = req.params.id;
+    const { orderId } = req.params;
 
-    // pega detalhes no formato correto do consumerService
     const resp = await obterDetalhesPedidoParaConsumer(orderId);
 
-    // se achou, marca como integrado
+    // Se entregou detalhes corretamente, marca integrado
     if (resp?.statusCode === 0 && resp?.item) {
       const db = getDb();
-
       await db.collection("pedidos").doc(String(orderId)).set(
         {
           integracao: {
@@ -130,32 +114,56 @@ router.get("/orders/:id", async (req, res) => {
     return res.status(200).json(resp);
   } catch (e) {
     console.error("❌ Erro ao retornar detalhes:", e);
-    return res.status(500).json({
-      item: null,
-      statusCode: 99,
-      reasonPhrase: "Erro interno nos detalhes",
-    });
+    return res.status(500).json({ item: null, statusCode: 99, reasonPhrase: "Erro interno nos detalhes" });
   }
 });
 
 /* =========================
-   POST /api/consumer/orders/:id/status
-   Consumer manda status (aceito, cancelado, etc)
+   3) POST ENVIO DE DETALHES DO PEDIDO (Consumer envia para o parceiro)
+   Manual diz que o Consumer também pode enviar os detalhes para a API do parceiro :contentReference[oaicite:4]{index=4}
+   A gente apenas ACEITA e salva para debug/log.
 ========================= */
-router.post("/orders/:id/status", async (req, res) => {
+router.post("/orders/:orderId/details", async (req, res) => {
   try {
     if (!authToken(req)) {
-      return res.status(401).json({
-        statusCode: 1,
-        reasonPhrase: "Token inválido (status)",
-      });
+      return res.status(401).json({ statusCode: 1, reasonPhrase: "Token inválido" });
     }
 
     const db = getDb();
-    const { id } = req.params;
+    const { orderId } = req.params;
+
+    await db.collection("pedidos").doc(String(orderId)).set(
+      {
+        integracao: {
+          consumerDetailsPostEm: new Date().toISOString(),
+          consumerDetailsPostPayload: req.body || null,
+        },
+      },
+      { merge: true }
+    );
+
+    return res.json({ statusCode: 0, reasonPhrase: null });
+  } catch (e) {
+    console.error("❌ Erro no POST details:", e);
+    return res.status(500).json({ statusCode: 99, reasonPhrase: "Erro interno no details" });
+  }
+});
+
+/* =========================
+   4) POST STATUS DO PEDIDO (Consumer envia atualização de status)
+   Manual: Consumer comunica confirmação, cancelamento, etc :contentReference[oaicite:5]{index=5}
+========================= */
+router.post("/orders/:orderId/status", async (req, res) => {
+  try {
+    if (!authToken(req)) {
+      return res.status(401).json({ statusCode: 1, reasonPhrase: "Token inválido" });
+    }
+
+    const db = getDb();
+    const { orderId } = req.params;
     const body = req.body || {};
 
-    await db.collection("pedidos").doc(id).set(
+    await db.collection("pedidos").doc(String(orderId)).set(
       {
         integracao: {
           statusConsumer: body.status || null,
@@ -167,49 +175,10 @@ router.post("/orders/:id/status", async (req, res) => {
       { merge: true }
     );
 
-    return res.json({ statusCode: 0, reasonPhrase: "OK" });
+    return res.json({ statusCode: 0, reasonPhrase: null });
   } catch (e) {
     console.error("❌ Erro ao receber status:", e);
-    return res.status(500).json({
-      statusCode: 99,
-      reasonPhrase: "Erro interno no status",
-    });
-  }
-});
-
-/* =========================
-   POST /api/consumer/orders/:id/details
-   Alguns Consumers chamam este endpoint
-========================= */
-router.post("/orders/:id/details", async (req, res) => {
-  try {
-    if (!authToken(req)) {
-      return res.status(401).json({
-        statusCode: 1,
-        reasonPhrase: "Token inválido (details)",
-      });
-    }
-
-    const db = getDb();
-    const { id } = req.params;
-
-    await db.collection("pedidos").doc(id).set(
-      {
-        integracao: {
-          detalhesPostRecebidoEm: new Date().toISOString(),
-          detalhesPostPayload: req.body || null,
-        },
-      },
-      { merge: true }
-    );
-
-    return res.json({ statusCode: 0, reasonPhrase: "OK" });
-  } catch (e) {
-    console.error("❌ Erro no POST details:", e);
-    return res.status(500).json({
-      statusCode: 99,
-      reasonPhrase: "Erro interno no details",
-    });
+    return res.status(500).json({ statusCode: 99, reasonPhrase: "Erro interno no status" });
   }
 });
 
