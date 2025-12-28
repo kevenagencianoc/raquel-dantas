@@ -5,9 +5,10 @@ import { obterDetalhesPedidoParaConsumer } from "../services/consumerService.js"
 const router = Router();
 
 /**
- * ✅ Pega token de várias formas (Consumer varia muito):
+ * ✅ Lê token de TUDO quanto é lugar:
  * - query ?token=
- * - header token / x-access-token / authorization
+ * - headers comuns do Consumer
+ * - authorization Bearer
  */
 function getToken(req) {
   let t =
@@ -15,6 +16,8 @@ function getToken(req) {
     req.headers["token"] ||
     req.headers["x-access-token"] ||
     req.headers["x-partner-token"] ||
+    req.headers["x-api-key"] ||
+    req.headers["apikey"] ||
     req.headers["authorization"];
 
   // "Bearer xxx"
@@ -22,34 +25,32 @@ function getToken(req) {
     t = t.slice(7).trim();
   }
 
+  // Se veio duplicado (?token=a&token=b), pega o primeiro
   if (Array.isArray(t)) t = t[0];
 
   return t;
 }
 
 function authToken(req) {
-  const token = getToken(req);
-  return token && token === process.env.PARTNER_TOKEN;
+  const tokenRecebido = getToken(req);
+  const tokenEsperado = process.env.PARTNER_TOKEN;
+
+  // Se você estiver sem env no Render, evita explodir e mostra erro claro
+  if (!tokenEsperado) return false;
+
+  return tokenRecebido && tokenRecebido === tokenEsperado;
 }
 
 /**
- * ✅ POLLING
  * GET /api/consumer/polling
- *
- * 🔥 Importante:
- * Muitos Consumers substituem {id} e IGNORAM {orderId}
- * Outros usam orderId.
- *
- * Então aqui mandamos:
- * - id = ID REAL do pedido (Firestore doc id)
- * - orderId = ID REAL do pedido (Firestore doc id)
- *
- * Assim qualquer um dos dois funciona.
  */
 router.get("/polling", async (req, res) => {
   try {
     if (!authToken(req)) {
-      return res.status(401).json({ statusCode: 1, reasonPhrase: "Token inválido" });
+      return res.status(401).json({
+        statusCode: 1,
+        reasonPhrase: "Token inválido (polling)",
+      });
     }
 
     const db = getDb();
@@ -59,10 +60,13 @@ router.get("/polling", async (req, res) => {
       .where("integracao.status", "==", "pronto_para_enviar_consumer")
       .get();
 
+    const agora = new Date().toISOString();
+
+    // ✅ id e orderId iguais (compatibilidade total)
     const items = snap.docs.map((d) => ({
-      id: d.id,       // ✅ alguns Consumers usam {id}
-      orderId: d.id,  // ✅ outros usam {orderId}
-      createdAt: new Date().toISOString(),
+      id: d.id,
+      orderId: d.id,
+      createdAt: agora,
       fullCode: "PLACED",
       code: "PLC",
     }));
@@ -75,15 +79,16 @@ router.get("/polling", async (req, res) => {
 });
 
 /**
- * ✅ DETALHES DO PEDIDO
  * GET /api/consumer/orders/:id
- *
- * (o :id aqui pode ser tanto {id} quanto {orderId}, pois ambos são iguais)
  */
 router.get("/orders/:id", async (req, res) => {
   try {
     if (!authToken(req)) {
-      return res.status(401).json({ statusCode: 1, reasonPhrase: "Token inválido" });
+      return res.status(401).json({
+        item: null,
+        statusCode: 1,
+        reasonPhrase: "Token inválido (orders)",
+      });
     }
 
     const response = await obterDetalhesPedidoParaConsumer(req.params.id);
@@ -99,13 +104,15 @@ router.get("/orders/:id", async (req, res) => {
 });
 
 /**
- * ✅ STATUS
  * POST /api/consumer/orders/:id/status
  */
 router.post("/orders/:id/status", async (req, res) => {
   try {
     if (!authToken(req)) {
-      return res.status(401).json({ statusCode: 1, reasonPhrase: "Token inválido" });
+      return res.status(401).json({
+        statusCode: 1,
+        reasonPhrase: "Token inválido (status)",
+      });
     }
 
     const db = getDb();
@@ -124,7 +131,7 @@ router.post("/orders/:id/status", async (req, res) => {
       { merge: true }
     );
 
-    return res.json({ statusCode: 0, reasonPhrase: `${id} atualizado.` });
+    return res.json({ statusCode: 0, reasonPhrase: "OK" });
   } catch (e) {
     console.error("❌ Erro ao receber status:", e);
     return res.status(500).json({ statusCode: 99, reasonPhrase: "Erro interno no status" });
@@ -132,13 +139,15 @@ router.post("/orders/:id/status", async (req, res) => {
 });
 
 /**
- * ✅ DETAILS (POST) - alguns PDVs chamam
  * POST /api/consumer/orders/:id/details
  */
 router.post("/orders/:id/details", async (req, res) => {
   try {
     if (!authToken(req)) {
-      return res.status(401).json({ statusCode: 1, reasonPhrase: "Token inválido" });
+      return res.status(401).json({
+        statusCode: 1,
+        reasonPhrase: "Token inválido (details)",
+      });
     }
 
     const db = getDb();
