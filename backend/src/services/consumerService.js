@@ -59,36 +59,65 @@ function obterItens(pedido) {
   return [];
 }
 
+/**
+ * ✅ GARANTE externalCode SEMPRE STRING (Consumer exige string)
+ * - tenta achar em vários campos comuns
+ * - se não achar, retorna "N/A" (evita quebrar por tipo number/undefined)
+ */
+function normalizarExternalCode(valorPossivel) {
+  if (valorPossivel === undefined || valorPossivel === null) return "";
+  const s = String(valorPossivel).trim();
+  return s;
+}
+
+function obterExternalCodeItem(i) {
+  const candidatos = [
+    i?.externalCode,
+    i?.codigoPdv,
+    i?.codPdv,
+    i?.pdv,
+    i?.codigo,
+    i?.idProduto,
+    i?.productCode,
+  ];
+
+  for (const c of candidatos) {
+    const s = normalizarExternalCode(c);
+    if (s) return s;
+  }
+
+  return "N/A";
+}
+
 function montarItens(pedido) {
   const lista = obterItens(pedido);
 
   return lista.map((i, idx) => {
-    const qtd = Number(i.qtd ?? i.quantidade ?? 1);
+    const qtd = Number(i.qtd ?? i.quantidade ?? i.quantity ?? 1);
     const unitPrice = Number(i.preco ?? i.unitPrice ?? 0);
-    const totalPrice = Number(i.subtotal ?? (unitPrice * qtd));
+    const totalPrice = Number(i.subtotal ?? i.totalPrice ?? (unitPrice * qtd));
 
-    // 🔥 externalCode como NUMBER (se vier vazio, vira 0)
-    const ext = Number(i.externalCode);
-    const externalCode = Number.isFinite(ext) ? ext : 0;
+    // ✅ externalCode como STRING (ex: "3")
+    const externalCode = obterExternalCodeItem(i);
 
     return {
-      id: uuid(),                 // obrigatório :contentReference[oaicite:7]{index=7}
+      id: uuid(),
       index: idx + 1,
       name: i.nome ?? i.name ?? "Produto",
-      externalCode,
+      externalCode, // ✅ string
       quantity: qtd,
       unitPrice,
       totalPrice,
-      unit: "UN",
-      ean: null,
+      unit: i.unit ?? "UN",
+      ean: i.ean ?? null,
       price: totalPrice,
-      observations: i.observacoes ?? null,
+      observations: i.observacoes ?? i.observations ?? null,
       imageUrl: i.imageUrl ?? null,
       options: null,
       uniqueId: uuid(),
-      optionsPrice: 0,
-      addition: 0,
-      scalePrices: null,
+      optionsPrice: Number(i.optionsPrice ?? 0),
+      addition: Number(i.addition ?? 0),
+      scalePrices: i.scalePrices ?? null,
     };
   });
 }
